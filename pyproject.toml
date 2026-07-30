@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fpl-predictions"
+version = "0.1.0"
+description = "Data and modelling foundations for rating Fantasy Premier League squads."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.2,<2",
+    "joblib>=1.3,<2",
+    "pandas>=2.1,<3",
+    "pyarrow>=15,<22",
+    "requests>=2.31,<3",
+    "scikit-learn>=1.5,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+]
+
+[project.scripts]
+fpl-refresh = "fpl_predictions.cli:main"
+fpl-snapshot-gameweek = "fpl_predictions.snapshot_cli:main"
+fpl-ingest-history = "fpl_predictions.history_cli:main"
+fpl-build-catalog = "fpl_predictions.catalog_cli:main"
+fpl-build-training-data = "fpl_predictions.training_cli:main"
+fpl-train-models = "fpl_predictions.model_cli:main"
+fpl-download-history = "fpl_predictions.historical_download_cli:main"
+fpl-build-historical-training = "fpl_predictions.backfill_cli:main"
+fpl-predict-players = "fpl_predictions.predict_cli:main"
+fpl-rate-squad = "fpl_predictions.squad_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

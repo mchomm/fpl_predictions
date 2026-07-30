@@ -1,0 +1,110 @@
+{
+  "elements": [
+    {
+      "id": 101,
+      "code": 50101,
+      "first_name": "Ada",
+      "second_name": "Keeper",
+      "web_name": "Keeper",
+      "team": 10,
+      "element_type": 1,
+      "now_cost": 45,
+      "photo": "50101.jpg",
+      "selected_by_percent": "12.3",
+      "status": "a",
+      "chance_of_playing_next_round": 100,
+      "chance_of_playing_this_round": null,
+      "news": "",
+      "news_added": null,
+      "total_points": 42,
+      "minutes": 810,
+      "goals_scored": 0,
+      "assists": 1,
+      "clean_sheets": 4,
+      "expected_goals": "0.00",
+      "expected_assists": "0.11"
+    },
+    {
+      "id": 202,
+      "code": 50202,
+      "first_name": "Bea",
+      "second_name": "Forward",
+      "web_name": "B. Forward",
+      "team": 20,
+      "element_type": 4,
+      "now_cost": 78,
+      "photo": "50202.jpg",
+      "selected_by_percent": "6.5",
+      "status": "d",
+      "chance_of_playing_next_round": 75,
+      "chance_of_playing_this_round": 75,
+      "news": "Minor knock",
+      "news_added": "2026-07-29T12:00:00Z",
+      "total_points": 55,
+      "minutes": 760,
+      "goals_scored": 7,
+      "assists": 2,
+      "clean_sheets": 0,
+      "expected_goals": "5.70",
+      "expected_assists": "1.40"
+    }
+  ],
+  "teams": [
+    {
+      "id": 10,
+      "name": "North Town",
+      "short_name": "NOR",
+      "strength": 3
+    },
+    {
+      "id": 20,
+      "name": "South City",
+      "short_name": "SOU",
+      "strength": 4
+    }
+  ],
+  "events": [
+    {
+      "id": 1,
+      "name": "Gameweek 1",
+      "deadline_time": "2026-08-15T10:00:00Z",
+      "is_current": false,
+      "is_next": true,
+      "finished": false
+    }
+  ],
+  "element_types": [
+    {
+      "id": 1,
+      "singular_name": "Goalkeeper",
+      "singular_name_short": "GKP",
+      "squad_select": 2,
+      "squad_min_play": 1,
+      "squad_max_play": 1
+    },
+    {
+      "id": 2,
+      "singular_name": "Defender",
+      "singular_name_short": "DEF",
+      "squad_select": 5,
+      "squad_min_play": 3,
+      "squad_max_play": 5
+    },
+    {
+      "id": 3,
+      "singular_name": "Midfielder",
+      "singular_name_short": "MID",
+      "squad_select": 5,
+      "squad_min_play": 2,
+      "squad_max_play": 5
+    },
+    {
+      "id": 4,
+      "singular_name": "Forward",
+      "singular_name_short": "FWD",
+      "squad_select": 3,
+      "squad_min_play": 1,
+      "squad_max_play": 3
+    }
+  ]
+}

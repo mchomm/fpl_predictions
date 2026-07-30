@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 venv/
 env/
@@ -18,12 +19,23 @@ env/
 # OS files
 .DS_Store
 
-# Large/generated data
-data/raw/
-data/processed/
-models/
-outputs/
+# Large/generated data (keep directory placeholders)
+data/raw/*
+!data/raw/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+models/*
+!models/.gitkeep
+outputs/*
+!outputs/.gitkeep
 *.pkl
 *.joblib
 *.pt
 *.pth
+*.duckdb
+*.duckdb.wal
+
+# Exploratory work in misc is intentionally tracked.
+#misc/
