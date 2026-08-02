@@ -143,12 +143,22 @@ def rate_squad(
         "scores 75. Overall is calculated directly from projected XI points "
         "plus the captain bonus; it is not an average of component scores."
     )
+    substitution_simulated = any(
+        "automatic substitutions" in warning.lower()
+        for warning in projection.warnings
+    )
+    substitution_note = (
+        "Automatic substitutions and vice-captain takeover use calibrated, "
+        "independent appearance scenarios; correlated team news is not modeled."
+        if substitution_simulated
+        else "Automatic substitutions and vice-captain takeover are not simulated."
+    )
     uncertainties = tuple(projection.warnings) + (
         "Ratings are relative to a simulated reference population and inherit "
         "the uncertainty and omissions of the player-point model.",
-        "Bench points are reported separately and are not included in overall "
-        "unless a future chip- or substitution-aware simulation is used.",
-        "Automatic substitutions and vice-captain takeover are not simulated.",
+        "Bench points are reported separately; when scenario simulation is "
+        "enabled, only legal automatic-substitution contributions enter overall.",
+        substitution_note,
         "The school-style score is a monotonic display calibration; consult the "
         "saved percentile and raw projected points for the underlying evidence.",
     )

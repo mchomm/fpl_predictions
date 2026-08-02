@@ -14,6 +14,7 @@ from fpl_predictions.squads.projection import (
 )
 from fpl_predictions.squads.rules import SquadRules
 from fpl_predictions.squads.schemas import SquadSelection
+from fpl_predictions.squads.simulation import simulate_selection
 
 REFERENCE_STRATEGIES = {
     "broad_legal",
@@ -51,6 +52,7 @@ def generate_reference_population(
     seed: int = 2026,
     target_cost: float | None = None,
     budget_band: float = 1.0,
+    availability_simulations: int = 0,
 ) -> pd.DataFrame:
     """Generate legal squads and score their strongest predicted starting XI."""
     if size <= 0:
@@ -63,6 +65,8 @@ def generate_reference_population(
         raise ValueError("budget_band must be non-negative")
     if target_cost is not None and target_cost <= 0:
         raise ValueError("target_cost must be positive")
+    if availability_simulations < 0:
+        raise ValueError("availability_simulations must be non-negative")
     merged = players.merge(
         predictions,
         on="player_id",
@@ -111,7 +115,32 @@ def generate_reference_population(
             rules,
         )
         selected = adjusted[adjusted["player_id"].isin(player_ids)]
-        record = _reference_projection(selected, selection, rules, horizon)
+        if availability_simulations:
+            simulation = simulate_selection(
+                selected,
+                selection,
+                rules,
+                horizon,
+                simulations=availability_simulations,
+                seed=seed,
+            )
+            record = simulation.projection.as_dict()
+            record.pop("warnings", None)
+            record.update(
+                {
+                    "simulation_count": availability_simulations,
+                    "expected_autosub_points": simulation.expected_autosub_points,
+                    "expected_vice_captain_points": (
+                        simulation.expected_vice_captain_points
+                    ),
+                    "autosub_probability": simulation.autosub_probability,
+                    "vice_captain_takeover_probability": (
+                        simulation.vice_captain_takeover_probability
+                    ),
+                }
+            )
+        else:
+            record = _reference_projection(selected, selection, rules, horizon)
         record.update(
             {
                 "reference_index": len(records),

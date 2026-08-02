@@ -37,5 +37,10 @@ outputs/*
 *.duckdb
 *.duckdb.wal
 
+# The intentionally small, versioned web-serving bundle is tracked.
+!deployment/
+!deployment/**
+!deployment/current/models/**/*.joblib
+
 # Exploratory work in misc is intentionally tracked.
 #misc/

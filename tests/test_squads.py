@@ -8,6 +8,10 @@ import pandas as pd
 import pytest
 
 from fpl_predictions.squads.generation import generate_reference_population
+from fpl_predictions.squads.optimizer import (
+    SquadOptimizationError,
+    optimize_squad,
+)
 from fpl_predictions.squads.projection import (
     player_projection_details,
     project_squad,
@@ -19,6 +23,7 @@ from fpl_predictions.squads.ratings import (
 )
 from fpl_predictions.squads.rules import SquadRules
 from fpl_predictions.squads.schemas import SquadSelection
+from fpl_predictions.squads.simulation import simulate_selection
 from fpl_predictions.squads.validation import (
     SquadValidationError,
     validate_squad,
@@ -116,6 +121,8 @@ def predictions() -> pd.DataFrame:
             "predicted_points_3": ids.astype(float) * 2,
             "predicted_minutes_1": ids.astype(float) * 4,
             "predicted_minutes_3": ids.astype(float) * 12,
+            "appearance_probability_1": [1.0] * 15,
+            "start_probability_1": [1.0] * 15,
         }
     )
 
@@ -205,6 +212,58 @@ def test_player_details_report_expected_minutes_without_rescaling_points(
     assert captain["predicted_points"] == 30
     assert captain["expected_minutes"] == 180
     assert captain["availability_adjusted_expected_minutes"] == 150
+
+
+def test_simulation_matches_raw_projection_when_everyone_appears(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    selection: SquadSelection,
+    predictions: pd.DataFrame,
+) -> None:
+    healthy = players.assign(
+        status="a",
+        chance_of_playing_this_round=None,
+        chance_of_playing_next_round=None,
+    )
+    merged = healthy.merge(predictions, on="player_id", validate="one_to_one")
+    result = simulate_selection(
+        merged, selection, rules, horizon=3, simulations=20, seed=7
+    )
+
+    assert result.projection.starting_xi_points == pytest.approx(186)
+    assert result.projection.captain_points == pytest.approx(30)
+    assert result.projection.overall_points == pytest.approx(216)
+    assert result.expected_autosub_points == 0
+    assert result.vice_captain_takeover_probability == 0
+
+
+def test_simulation_applies_legal_autosub_and_vice_takeover(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    selection: SquadSelection,
+    predictions: pd.DataFrame,
+) -> None:
+    healthy = players.assign(
+        status="a",
+        chance_of_playing_this_round=None,
+        chance_of_playing_next_round=None,
+    )
+    merged = healthy.merge(predictions, on="player_id", validate="one_to_one")
+    # Starting DEF 3 and captain 15 never appear. Bench DEF 6 and vice 14 do.
+    merged.loc[merged["player_id"].isin([3, 15]), "appearance_probability_1"] = 0
+    for horizon in (1, 3):
+        merged.loc[
+            merged["player_id"].isin([3, 15]),
+            f"predicted_points_{horizon}",
+        ] = 0
+    result = simulate_selection(
+        merged, selection, rules, horizon=3, simulations=20, seed=11
+    )
+
+    assert result.expected_autosub_points == pytest.approx(26)
+    assert result.autosub_probability == 1
+    assert result.expected_vice_captain_points == pytest.approx(28)
+    assert result.vice_captain_takeover_probability == 1
 
 
 def test_midrank_percentile_and_direct_overall_rating() -> None:
@@ -309,6 +368,188 @@ def test_human_like_references_are_ownership_and_budget_conditioned(
     assert references["total_cost"].eq(85.0).all()
     assert references["target_cost"].eq(85.0).all()
     assert references["minimum_reference_cost"].eq(85.0).all()
+
+
+def test_reference_population_uses_same_availability_simulation_policy(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    predictions: pd.DataFrame,
+) -> None:
+    references = generate_reference_population(
+        players,
+        predictions,
+        rules,
+        horizon=3,
+        size=2,
+        strategy="human_like",
+        seed=17,
+        target_cost=85.0,
+        budget_band=0.0,
+        availability_simulations=10,
+    )
+
+    assert references["simulation_count"].eq(10).all()
+    assert references["expected_autosub_points"].ge(0).all()
+    assert references["vice_captain_takeover_probability"].between(0, 1).all()
+
+
+def test_optimizer_produces_exact_legal_improvement_with_transfer_limit(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    selection: SquadSelection,
+    predictions: pd.DataFrame,
+) -> None:
+    alternative = players.iloc[[2]].copy()
+    alternative["player_id"] = 16
+    alternative["display_name"] = "Elite Defender"
+    alternative["club_id"] = 1
+    expanded_players = pd.concat([players, alternative], ignore_index=True)
+    alternative_prediction = predictions.iloc[[2]].copy()
+    alternative_prediction["player_id"] = 16
+    alternative_prediction["predicted_points_1"] = 20.0
+    alternative_prediction["predicted_points_3"] = 50.0
+    expanded_predictions = pd.concat(
+        [predictions, alternative_prediction], ignore_index=True
+    )
+
+    result = optimize_squad(
+        expanded_players,
+        expanded_predictions,
+        rules,
+        horizon=3,
+        current_squad=selection,
+        max_transfers=1,
+    )
+
+    validate_squad(result.selection, expanded_players, rules)
+    assert result.transfers_in == (16,)
+    assert len(result.transfers_out) == 1
+    assert result.projected_points_gain is not None
+    assert result.projected_points_gain > 0
+    assert result.selection.captain == 16
+
+
+def test_optimizer_reports_infeasible_locked_club_limit(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    predictions: pd.DataFrame,
+) -> None:
+    alternatives = pd.concat([players, players.iloc[[0]]], ignore_index=True)
+    alternatives.loc[alternatives.index[-1], "player_id"] = 16
+    alternatives.loc[alternatives.index[-1], "club_id"] = 1
+    extra_prediction = predictions.iloc[[0]].assign(player_id=16)
+    expanded_predictions = pd.concat(
+        [predictions, extra_prediction], ignore_index=True
+    )
+
+    with pytest.raises(SquadOptimizationError, match="No legal optimized squad"):
+        optimize_squad(
+            alternatives,
+            expanded_predictions,
+            rules,
+            locked_player_ids=(1, 6, 11, 16),
+        )
+
+
+def test_optimizer_charges_only_transfers_beyond_free_allowance(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    selection: SquadSelection,
+    predictions: pd.DataFrame,
+) -> None:
+    alternatives = players.iloc[[2, 3]].copy()
+    alternatives["player_id"] = [16, 17]
+    alternatives["club_id"] = [3, 4]
+    alternatives["price"] = [5.0, 5.0]
+    expanded_players = pd.concat([players, alternatives], ignore_index=True)
+    extra_predictions = predictions.iloc[[2, 3]].copy()
+    extra_predictions["player_id"] = [16, 17]
+    extra_predictions["predicted_points_1"] = [20.0, 19.0]
+    extra_predictions["predicted_points_3"] = [50.0, 48.0]
+    expanded_predictions = pd.concat(
+        [predictions, extra_predictions], ignore_index=True
+    )
+
+    result = optimize_squad(
+        expanded_players,
+        expanded_predictions,
+        rules,
+        horizon=3,
+        current_squad=selection,
+        max_transfers=2,
+        excluded_player_ids=(3, 4),
+        free_transfers=1,
+        hit_cost=4.0,
+    )
+
+    assert len(result.transfers_in) == 2
+    assert result.free_transfers == 1
+    assert result.paid_transfers == 1
+    assert result.transfer_hit_points == 4.0
+    assert result.net_projected_points_gain == pytest.approx(
+        result.projected_points_gain - 4.0
+    )
+
+
+def test_optimizer_uses_manager_sell_value_for_affordability(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    selection: SquadSelection,
+    predictions: pd.DataFrame,
+) -> None:
+    current = SquadSelection(
+        player_ids=selection.player_ids,
+        starting_xi=selection.starting_xi,
+        bench=selection.bench,
+        captain=selection.captain,
+        vice_captain=selection.vice_captain,
+        source="manager_api",
+        bank=0.0,
+        selling_prices={
+            player_id: (
+                6.0 if player_id == 15 else float(
+                    players.set_index("player_id").loc[player_id, "price"]
+                )
+            )
+            for player_id in selection.player_ids
+        },
+    )
+    alternative = players.iloc[[14]].copy()
+    alternative["player_id"] = 16
+    alternative["club_id"] = 1
+    alternative["price"] = 7.0
+    expanded_players = pd.concat([players, alternative], ignore_index=True)
+    extra_prediction = predictions.iloc[[14]].assign(
+        player_id=16,
+        predicted_points_1=50.0,
+        predicted_points_3=100.0,
+    )
+    expanded_predictions = pd.concat(
+        [predictions, extra_prediction], ignore_index=True
+    )
+
+    with pytest.raises(SquadOptimizationError, match="No legal optimized squad"):
+        optimize_squad(
+            expanded_players,
+            expanded_predictions,
+            rules,
+            horizon=3,
+            current_squad=current,
+            max_transfers=1,
+            locked_player_ids=set(selection.player_ids) - {15},
+            excluded_player_ids=(15,),
+        )
+
+
+def test_squad_schema_parses_json_price_maps(selection: SquadSelection) -> None:
+    payload = selection.as_dict()
+    payload["purchase_prices"] = {"1": 4.5}
+    payload["selling_prices"] = {"1": 4.7}
+
+    parsed = SquadSelection.from_mapping(payload)
+
+    assert parsed.purchase_prices == {1: 4.5}
+    assert parsed.selling_prices == {1: 4.7}
 
 
 def test_human_like_references_require_ownership(

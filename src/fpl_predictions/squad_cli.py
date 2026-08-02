@@ -26,7 +26,8 @@ from fpl_predictions.squads.projection import (
 from fpl_predictions.squads.ratings import rate_squad
 from fpl_predictions.squads.rules import SquadRules
 from fpl_predictions.squads.schemas import SquadSelection
-from fpl_predictions.squads.validation import validate_squad
+from fpl_predictions.squads.simulation import simulate_selection
+from fpl_predictions.squads.validation import ValidatedSquad, validate_squad
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -57,6 +58,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument(
+        "--availability-simulations",
+        type=int,
+        default=None,
+        help=(
+            "Appearance scenarios per squad for autosubs and vice-captain "
+            "takeover. By default, 500 are enabled once the submitted squad "
+            "has at least two recent gameweeks; use 0 for deterministic mode."
+        ),
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
 
@@ -76,9 +87,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("Squad JSON must contain one object")
         selection = SquadSelection.from_mapping(squad_payload)
         validated = validate_squad(selection, players, rules)
-        projection = project_squad(
+        simulation_count, simulation_readiness = _simulation_count(
+            args.availability_simulations,
+            validated,
+            predictions,
+        )
+        deterministic_projection = project_squad(
             validated, predictions, rules, args.horizon
         )
+        simulation = None
+        projection = deterministic_projection
+        if simulation_count:
+            prediction_columns = [
+                column
+                for column in predictions.columns
+                if column not in validated.player_rows.columns
+                or column == "player_id"
+            ]
+            simulation_players = validated.player_rows.merge(
+                predictions.loc[:, prediction_columns],
+                on="player_id",
+                how="left",
+                validate="one_to_one",
+            )
+            simulation = simulate_selection(
+                simulation_players,
+                selection,
+                rules,
+                args.horizon,
+                simulations=simulation_count,
+                seed=args.seed,
+            )
+            projection = simulation.projection
         references = generate_reference_population(
             players=players,
             predictions=predictions,
@@ -89,6 +129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             seed=args.seed,
             target_cost=rules.budget,
             budget_band=args.reference_budget_band,
+            availability_simulations=simulation_count,
         )
         if args.strategy == "human_like":
             reference_name = (
@@ -125,6 +166,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
             "rules": asdict(rules),
             "projection": projection.as_dict(),
+            "deterministic_projection_audit": deterministic_projection.as_dict(),
+            "availability_simulation": (
+                simulation.as_dict() if simulation is not None else None
+            ),
             "player_projections": player_projection_details(
                 validated,
                 predictions,
@@ -155,6 +200,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "lineup_policy": (
                     "model-best legal XI and model-best captain from each squad"
                 ),
+                "availability_simulations_per_squad": (
+                    simulation_count
+                ),
+                "availability_simulation_seed": args.seed,
+                "availability_simulation_readiness": simulation_readiness,
             },
             "reference_summary": _reference_summary(references, players),
             "reference_file": str(references_path.resolve()),
@@ -176,6 +226,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Report: {report_path}")
     print(f"References: {references_path}")
     return 0
+
+
+def _simulation_count(
+    requested: int | None,
+    validated: ValidatedSquad,
+    predictions: pd.DataFrame,
+) -> tuple[int, dict[str, object]]:
+    """Gate automatic simulation until participation features have live history."""
+    if requested is not None and requested < 0:
+        raise ValueError("availability simulations must be non-negative")
+    selected_ids = list(validated.selection.player_ids)
+    selected = predictions[predictions["player_id"].isin(selected_ids)]
+    coverage = pd.to_numeric(
+        selected.get(
+            "recent_gameweeks_available",
+            pd.Series(float("nan"), index=selected.index),
+        ),
+        errors="coerce",
+    )
+    median_history = (
+        float(coverage.median()) if coverage.notna().any() else 0.0
+    )
+    ready = median_history >= 2.0
+    resolved = requested if requested is not None else (500 if ready else 0)
+    return resolved, {
+        "automatic_gate": requested is None,
+        "ready": ready,
+        "median_recent_gameweeks_available": median_history,
+        "minimum_for_automatic_simulation": 2,
+        "note": (
+            "Simulation enabled."
+            if resolved
+            else "Deterministic projection retained until live participation "
+            "history is sufficient; pass --availability-simulations to test "
+            "the cold-start scenarios explicitly."
+        ),
+    }
 
 
 def _reference_summary(

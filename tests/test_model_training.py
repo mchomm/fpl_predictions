@@ -42,6 +42,10 @@ def _training_table() -> pd.DataFrame:
                     "club_id": player_id % 3,
                     "label_next_1_gameweek": points,
                     "label_minutes_next_1_gameweek": 90.0,
+                    "recent_appearance_rate_3": float(player_id % 2),
+                    "recent_start_rate_3": float(player_id % 3 == 0),
+                    "label_appearances_next_1_gameweek": float(player_id % 2),
+                    "label_starts_next_1_gameweek": float(player_id % 3 == 0),
                 }
             )
     return pd.DataFrame(rows)
@@ -103,3 +107,24 @@ def test_train_expected_minutes_artifact(tmp_path) -> None:
         "recent_minutes_with_model_fallback",
     }.issubset(set(result.leaderboard["model"]))
     assert predictions["predicted_future_points"].notna().all()
+
+
+def test_train_calibrated_appearance_probability(tmp_path) -> None:
+    table = _training_table()
+    result = train_horizon(
+        table,
+        horizon=1,
+        output_dir=tmp_path / "appearance-horizon-1",
+        min_train_periods=3,
+        calibration_bins=4,
+        random_seed=7,
+        source_paths=[],
+        target_kind="appearances",
+    )
+
+    artifact = load_artifact(result.model_path)
+    predictions = predict_players(artifact, table.iloc[:6])
+
+    assert artifact.metadata["target_kind"] == "appearances"
+    assert artifact.metadata["probability_calibration"]["audit_rows"] > 0
+    assert predictions["predicted_future_points"].between(0, 1).all()

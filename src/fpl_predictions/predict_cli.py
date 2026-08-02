@@ -25,6 +25,7 @@ from fpl_predictions.data.storage import (
 from fpl_predictions.modelling.artifacts import load_artifact
 from fpl_predictions.modelling.features import ModelFeatureError
 from fpl_predictions.modelling.predict import predict_players
+from fpl_predictions.modelling.lineup_roles import reconcile_lineup_probabilities
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -137,7 +138,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "snapshot_gameweek",
                 "snapshot_timestamp",
                 "player_id",
+                "club_id",
                 "display_name",
+                "position_id",
                 "position_short_name",
                 "club_name",
                 "price",
@@ -145,6 +148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "chance_of_playing_this_round",
                 "chance_of_playing_next_round",
                 "news",
+                "recent_gameweeks_available",
             )
             if column in features
         ]
@@ -171,6 +175,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             predictions[output_name] = predicted[
                 "predicted_future_points"
             ].clip(lower=0, upper=1).to_numpy()
+        if {
+            "appearance_probability_1",
+            "start_probability_1",
+        }.issubset(predictions.columns):
+            predictions["start_probability_1"] = predictions[
+                ["start_probability_1", "appearance_probability_1"]
+            ].min(axis=1)
+            predictions, lineup_role_audit = reconcile_lineup_probabilities(
+                predictions
+            )
+        else:
+            lineup_role_audit = None
 
         output = args.output or (
             args.data_dir.parent
@@ -203,6 +219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 "horizons": horizons,
                 "rows": len(predictions),
+                "lineup_role_reconciliation": lineup_role_audit,
                 "limitations": [
                     "Historical models do not yet use archived injury status.",
                     "Preseason recent-form features may be unavailable.",

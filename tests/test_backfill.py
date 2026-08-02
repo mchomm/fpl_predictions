@@ -36,6 +36,8 @@ def test_reconstruction_shifts_performance_and_excludes_xp() -> None:
     assert table.loc[(101, 4), "upcoming_fixture_count_1"] == 2
     assert table.loc[(101, 4), "label_next_1_gameweek"] == 8
     assert table.loc[(101, 4), "label_minutes_next_1_gameweek"] == 180
+    assert table.loc[(101, 4), "label_appearances_next_1_gameweek"] == 1
+    assert table.loc[(101, 4), "label_starts_next_1_gameweek"] == 1
     assert table.loc[(101, 3), "label_next_3_gameweeks"] == 16
     assert table.loc[(101, 1), "club_attack_strength"] == pytest.approx(1.0)
     assert table.loc[(101, 4), "club_strength_matches"] == 3

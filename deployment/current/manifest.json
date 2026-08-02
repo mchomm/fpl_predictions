@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "2026-08-02T18:22:53.809681+00:00",
+  "season": "2026-27",
+  "snapshot_gameweek": 1,
+  "snapshot_timestamp": "2026-07-30T16:23:56.213385+00:00",
+  "prediction_created_at_utc": "2026-08-02T16:58:44.046512+00:00",
+  "horizons": [
+    1,
+    3,
+    5
+  ],
+  "reference_configuration": {
+    "strategy": "human_like",
+    "size": 1000,
+    "seed": 2026,
+    "budget_band": 1.0
+  },
+  "model_runs": {
+    "points": "20260802T150839931234Z",
+    "minutes": "20260802T152221018736Z",
+    "appearances": "20260802T154849873784Z",
+    "starts": "20260802T155252021597Z"
+  },
+  "runtime_policy": {
+    "predictions": "precomputed by the versioned model artifacts",
+    "models_included": true,
+    "training_data_included": false,
+    "uploaded_images_persisted": false
+  },
+  "files": {
+    "players": {
+      "path": "players.parquet",
+      "bytes": 206817,
+      "sha256": "cb320655767bb18c1326fc3f91c5a4a1adfde15b0f6870a03f8e8ad79bd6f21e"
+    },
+    "predictions": {
+      "path": "predictions.parquet",
+      "bytes": 69115,
+      "sha256": "d0457ed84d953ad8ce7ce8d68b487f731e0cc60f3c3fbf9ff1e23f675c827b25"
+    },
+    "bootstrap": {
+      "path": "bootstrap-static.json",
+      "bytes": 1826985,
+      "sha256": "50459708dd029eb8cd31bd51582d2d5d2ef1110747d9664eeb7227ab30a844c9"
+    },
+    "references": {
+      "1": {
+        "path": "references/horizon-1.parquet",
+        "bytes": 140830,
+        "sha256": "3107590d536581abff94ae0b60598845731391ead0b7088e993f38a64edfecd3"
+      },
+      "3": {
+        "path": "references/horizon-3.parquet",
+        "bytes": 140746,
+        "sha256": "190b8f8caf0c89243b3a9e471e00e27b3ac90cc4bf081a10885975d4186f819f"
+      },
+      "5": {
+        "path": "references/horizon-5.parquet",
+        "bytes": 140695,
+        "sha256": "684e7a35c6275157072d4a5a4795394850bd9937e8211e9f75fbbda43dadce5e"
+      }
+    },
+    "models": [
+      {
+        "path": "models/points/horizon-1/model.joblib",
+        "bytes": 5705580,
+        "sha256": "d93f60249730cc7530c64229d0889e8f1c084eca26153878813c4c6f851d3a1f",
+        "role": "points",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/points/horizon-1/metadata.json",
+        "bytes": 4466,
+        "sha256": "dc9c02c2fa1766dd8b518f98f866c07c462e693a3fae5cd12d2e9199c5584bd9",
+        "role": "points",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/points/horizon-1/feature_schema.json",
+        "bytes": 1645,
+        "sha256": "1aa1579e4ee5e4b9bd29cee8bb84ec5cb11bd2a19ba985c4463682e853666c81",
+        "role": "points",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/points/horizon-3/model.joblib",
+        "bytes": 6739485,
+        "sha256": "01a34fb7df0c88a95e3c85f0970ea986b59b2127ec91316ce36e8d9724339d46",
+        "role": "points",
+        "horizon": "horizon-3"
+      },
+      {
+        "path": "models/points/horizon-3/metadata.json",
+        "bytes": 4435,
+        "sha256": "9490e3366438cfd4a90f7d20b4abc4dbe4251b9b3c9b39846a50b6ddfdd32c52",
+        "role": "points",
+        "horizon": "horizon-3"
+      },
+      {
+        "path": "models/points/horizon-3/feature_schema.json",
+        "bytes": 1645,
+        "sha256": "1aa1579e4ee5e4b9bd29cee8bb84ec5cb11bd2a19ba985c4463682e853666c81",
+        "role": "points",
+        "horizon": "horizon-3"
+      },
+      {
+        "path": "models/points/horizon-5/model.joblib",
+        "bytes": 6783371,
+        "sha256": "e37153a693780b922b82b066cd8190233f1c8b353df7b83a398fcb4302005e28",
+        "role": "points",
+        "horizon": "horizon-5"
+      },
+      {
+        "path": "models/points/horizon-5/metadata.json",
+        "bytes": 4421,
+        "sha256": "eb436518823e13ab5d2b269a6acb19dac824e5e21f85cd9616883b6f158b338c",
+        "role": "points",
+        "horizon": "horizon-5"
+      },
+      {
+        "path": "models/points/horizon-5/feature_schema.json",
+        "bytes": 1645,
+        "sha256": "1aa1579e4ee5e4b9bd29cee8bb84ec5cb11bd2a19ba985c4463682e853666c81",
+        "role": "points",
+        "horizon": "horizon-5"
+      },
+      {
+        "path": "models/minutes/horizon-1/model.joblib",
+        "bytes": 7097695,
+        "sha256": "6ff24ba1c1b8f7fb6ea5630321951659290aac0c988482e601f459a2ad07b34f",
+        "role": "minutes",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/minutes/horizon-1/metadata.json",
+        "bytes": 4817,
+        "sha256": "b929f43246093d2edb3f3fbc268b8ef370ff1109fabb57d23a2e90d4d03e3937",
+        "role": "minutes",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/minutes/horizon-1/feature_schema.json",
+        "bytes": 1645,
+        "sha256": "1aa1579e4ee5e4b9bd29cee8bb84ec5cb11bd2a19ba985c4463682e853666c81",
+        "role": "minutes",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/minutes/horizon-3/model.joblib",
+        "bytes": 8275152,
+        "sha256": "cf414eec60215c187f242e5c12e5221266ae79de7bce8f5b2e5cd8517dedf7f2",
+        "role": "minutes",
+        "horizon": "horizon-3"
+      },
+      {
+        "path": "models/minutes/horizon-3/metadata.json",
+        "bytes": 4792,
+        "sha256": "9a800a47c595b4ee12db46184b3f3e3060f2e27820dfdfe1b2947aaa8a4f9871",
+        "role": "minutes",
+        "horizon": "horizon-3"
+      },
+      {
+        "path": "models/minutes/horizon-3/feature_schema.json",
+        "bytes": 1645,
+        "sha256": "1aa1579e4ee5e4b9bd29cee8bb84ec5cb11bd2a19ba985c4463682e853666c81",
+        "role": "minutes",
+        "horizon": "horizon-3"
+      },
+      {
+        "path": "models/minutes/horizon-5/model.joblib",
+        "bytes": 8785614,
+        "sha256": "ba97b8a0aac3befca00270fdafb2ce1904ae620b59c96d46471eed01305d79f4",
+        "role": "minutes",
+        "horizon": "horizon-5"
+      },
+      {
+        "path": "models/minutes/horizon-5/metadata.json",
+        "bytes": 4820,
+        "sha256": "6fb2302ac07e28dae2bb5ac22491adff22eb7824d403de492f571b48de7cc0d1",
+        "role": "minutes",
+        "horizon": "horizon-5"
+      },
+      {
+        "path": "models/minutes/horizon-5/feature_schema.json",
+        "bytes": 1645,
+        "sha256": "1aa1579e4ee5e4b9bd29cee8bb84ec5cb11bd2a19ba985c4463682e853666c81",
+        "role": "minutes",
+        "horizon": "horizon-5"
+      },
+      {
+        "path": "models/appearances/horizon-1/model.joblib",
+        "bytes": 7933971,
+        "sha256": "3bf70f4b5f0bbeaf65a265796da86d2c03882a0122a5046f2fd4b6992bd8cfb8",
+        "role": "appearances",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/appearances/horizon-1/metadata.json",
+        "bytes": 5177,
+        "sha256": "7c4a5307191f29f31219c3f53c9177ddf1ab15266cdff305aae44c8778f8865f",
+        "role": "appearances",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/appearances/horizon-1/feature_schema.json",
+        "bytes": 1704,
+        "sha256": "bc33f164566405e76db0952c7ac7b8404d6b18024b02ff626159f7c296ad1ab6",
+        "role": "appearances",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/starts/horizon-1/model.joblib",
+        "bytes": 6986575,
+        "sha256": "4be96f041b8b425498298ea07b30f9479d0ea577852d33d068c33bd26179fb83",
+        "role": "starts",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/starts/horizon-1/metadata.json",
+        "bytes": 5155,
+        "sha256": "63a7635fe2b899c966db3f969292d29efb5ba9a8a5a9a99098faac2644ad2dbf",
+        "role": "starts",
+        "horizon": "horizon-1"
+      },
+      {
+        "path": "models/starts/horizon-1/feature_schema.json",
+        "bytes": 1704,
+        "sha256": "bc33f164566405e76db0952c7ac7b8404d6b18024b02ff626159f7c296ad1ab6",
+        "role": "starts",
+        "horizon": "horizon-1"
+      }
+    ]
+  }
+}

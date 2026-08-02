@@ -197,6 +197,24 @@ fpl-train-models \
   --target minutes
 ```
 
+Next-gameweek appearance and start probabilities use the same leakage-safe
+features and hybrid cold-start fallback. Their sigmoid calibration is fitted
+from out-of-fold temporal predictions and audited on later origins:
+
+```bash
+fpl-train-models \
+  --training-data data/processed/historical_backfill/<id>/training.parquet \
+  --horizons 1 \
+  --min-train-gameweeks 8 \
+  --target appearances
+
+fpl-train-models \
+  --training-data data/processed/historical_backfill/<id>/training.parquet \
+  --horizons 1 \
+  --min-train-gameweeks 8 \
+  --target starts
+```
+
 Validation is chronological. For a validation snapshot at gameweek `G`, a
 same-season training row is eligible only if its entire future label ended
 before `G`. For example, validation at GW8 with a three-gameweek target may use
@@ -316,6 +334,8 @@ Apply a completed model run to the latest saved deadline snapshot:
 fpl-predict-players \
   --models-run models/<run-id> \
   --minutes-models-run models/<minutes-run-id> \
+  --appearance-models-run models/<appearance-run-id> \
+  --start-models-run models/<start-run-id> \
   --season 2026-27 \
   --gameweek 1
 ```
@@ -324,13 +344,91 @@ This builds recent and fixture features without requiring current-season future
 labels, loads each horizon artifact, and writes identified point and optional
 expected-minutes predictions under `outputs/predictions`. Expected minutes are
 reported separately; they do not arbitrarily rescale the independently trained
-point forecast.
+point forecast. The optional participation artifacts add calibrated
+`appearance_probability_1` and `start_probability_1` columns.
 
 The current historical models do not learn injury status because reliable
 archived availability snapshots are unavailable. Status and news are retained
 in the prediction output for later availability adjustment and warnings.
 Preseason recent-form features may also be missing. These outputs are raw
 player forecasts, not transfer recommendations or 0–100 squad ratings.
+
+## Recognize a squad screenshot
+
+The screenshot workflow runs entirely locally. Install the Tesseract OCR
+binary once (for Ubuntu/Debian, `sudo apt-get install tesseract-ocr`) and run:
+
+```bash
+python scripts/recognize_screenshot.py \
+  --image examples/max_palmer_version.jpeg \
+  --predictions outputs/predictions/players-20260802-lineup-reconciled.parquet \
+  --output outputs/recognitions/max-palmer/squad.json
+```
+
+The command normalizes a clean FPL `Pick Team` screenshot, OCRs every possible
+legal formation layout, and solves an exact assignment against the current
+player snapshot. The assignment requires 15 unique players, the official
+position totals, no more than the current club limit, and 11 positionally legal
+starters. It separately detects the `C` and `V` badges. Shirt imagery and
+fixture text are not treated as facts.
+
+Two files are written: a normal squad JSON accepted by the rating and optimizer
+commands, and a `.recognition.json` audit. The audit keeps every OCR reading,
+selected player, match score, top alternatives, detected captaincy markers, and
+low-confidence review warnings. It is therefore possible to correct OCR rather
+than silently accepting an uncertain match.
+
+Corrections use stable slot IDs from the audit:
+
+```json
+{
+  "slots": {
+    "starter:MID:1": 154,
+    "bench:3": 212
+  },
+  "captain": 411,
+  "vice_captain": 154
+}
+```
+
+Pass the file with `--corrections corrections.json` and rerun recognition. For
+a photograph containing borders around the phone, `--screen-box X Y WIDTH
+HEIGHT` crops the phone screen before recognition. Perspective rectification
+is not part of this first local version, so strongly angled phone photographs
+may still require a manually straightened crop or user corrections.
+
+## Streamlit web application
+
+The repository includes a deployable interface that connects screenshot
+recognition, editable squad review, ratings, transfer suggestions, and best-
+squad generation:
+
+```bash
+pip install -e '.[web]'
+streamlit run streamlit_app.py
+```
+
+The application reads the immutable `deployment/current/` bundle. The bundle
+contains the active normalized player snapshot, predictions, three precomputed
+1,000-squad reference populations, FPL rules, and the checksummed point,
+minutes, appearance, and start model artifacts. Historical training data and
+uploaded screenshots are excluded. Uploaded images are written only to a
+temporary file and deleted immediately after OCR.
+
+For Streamlit Community Cloud:
+
+1. Push the repository, including `deployment/current/`, to GitHub.
+2. Create an app at `share.streamlit.io` from that repository.
+3. Choose `streamlit_app.py` as the entrypoint and Python 3.12.
+4. Deploy. `requirements.txt` installs the project and Streamlit;
+   `packages.txt` installs the local Tesseract binary.
+
+The app verifies every serving artifact against `manifest.json` before use and
+displays the exact model-run IDs, snapshot time, prediction time, horizons, and
+reference configuration. The deployed request path uses precomputed
+predictions for speed; those predictions are generated by the included model
+artifacts. The bundle builder and update procedure are documented in
+`deployment/README.md`.
 
 ## Rate a squad
 
@@ -364,7 +462,7 @@ This repository's saved 2026–27 GW1 data can be exercised immediately with:
 ```bash
 python scripts/rate_squad.py \
   --squad examples/squad-2026-27-gw1.json \
-  --predictions outputs/predictions/players-20260730T162418441941Z.parquet \
+  --predictions outputs/predictions/players-20260802T160315249182Z.parquet \
   --horizon 3 \
   --strategy human_like \
   --reference-size 100
@@ -418,7 +516,15 @@ against their corresponding distribution. Overall is scored directly from
 starting-XI points plus one captain bonus; it is not an average of component
 scores. Bench points remain separate.
 Active chips are rejected rather than silently applying normal scoring.
-Automatic substitutions and vice-captain takeover are not yet simulated.
+
+When calibrated appearance probabilities are present and the submitted squad
+has a median of at least two recent live gameweeks, ratings automatically use
+500 seeded appearance scenarios per submitted and reference squad. The engine
+applies bench order, goalkeeper-only replacement, legal outfield formations,
+and vice-captain takeover. `--availability-simulations 0` retains deterministic
+audit mode; a positive value explicitly runs cold-start scenarios before the
+automatic readiness gate opens. Every report preserves both the simulation
+configuration and the old deterministic projection.
 
 When the prediction file includes expected-minutes artifacts, every rating
 report includes a 15-player `player_projections` section with raw points,
@@ -491,6 +597,67 @@ These samples are not automatically used as the rating population yet. They
 must first accumulate and pass coverage/bias audits. Until then, reports remain
 explicitly labeled as synthetic human-like comparisons.
 
+## Optimize a squad
+
+Build an exact legal squad from the full prediction-covered player pool:
+
+```bash
+python scripts/optimize_squad.py \
+  --predictions outputs/predictions/players-20260802T160315249182Z.parquet \
+  --horizon 3 \
+  --bench-weight 0.1
+```
+
+Recommend at most two changes to an existing squad, charging a four-point hit
+after its one available free transfer:
+
+```bash
+python scripts/optimize_squad.py \
+  --squad examples/screenshot-squad-2026-27-gw1.json \
+  --predictions outputs/predictions/players-20260802T160315249182Z.parquet \
+  --horizon 3 \
+  --max-transfers 2 \
+  --free-transfers 1 \
+  --hit-cost 4
+```
+
+The optimizer uses a mixed-integer program and enforces the API-derived squad
+size, exact positional quotas, legal starting formation, budget, club limit,
+XI membership, and captaincy. Its objective is starting-XI projected points,
+one captain bonus, and a configurable fraction of bench points. `--lock` and
+`--exclude` accept player IDs. Reports include the solver status and MIP gap,
+the complete selection, before/after projections, transfers, remaining bank,
+and player-readable explanations.
+
+The objective subtracts the configured hit for every transfer beyond the free
+allowance. The current game allows zero to five saved transfers, accepted by
+`--free-transfers`. Add manager-specific `selling_prices` to the squad JSON for
+exact affordability, together with the actual bank:
+
+```json
+{
+  "bank": 0.7,
+  "selling_prices": {"1": 5.1, "11": 4.6}
+}
+```
+
+The object may instead contain `purchase_prices`; sell values are then
+reconstructed from purchase and current prices. Missing sell values fall back
+to current price and are explicitly reported as approximations. Screenshots do
+not expose manager-specific bank or sell values, so screenshot affordability
+remains approximate unless the user supplies them.
+
+When appearance and start artifacts are supplied to `fpl-predict-players`, the
+independent role probabilities are reconciled across every current club. A
+shared log-odds projection makes goalkeeper start probabilities sum to one and
+outfield start probabilities sum to ten while preserving the model ordering.
+Both independent and reconciled values are retained for auditing; there are no
+player-name or club-name exceptions.
+
+Availability simulation can be requested as post-optimization evidence. Chips
+and separate transfer sequences for each future Gameweek remain outside this
+single-deadline optimizer.
+
 ## Initial real-data benchmark
 
 A local benchmark was run against the pinned three-season backfill using 12
@@ -503,9 +670,10 @@ evenly distributed purged rolling origins per horizon:
 | 5 GWs | Random forest with opponent strength | 3.748 | 4.422 |
 
 The separately selected expected-minutes hybrids achieved MAE of 13.618,
-41.092, and 66.281 minutes over the 1-, 3-, and 5-gameweek horizons. These are
-playing-time expectations, not appearance probabilities; scenario-based
-automatic substitutions still require a calibrated appearance classifier.
+41.092, and 66.281 minutes over the 1-, 3-, and 5-gameweek horizons. The
+one-gameweek appearance and start hybrids achieved MAE of 0.161 and 0.140.
+On later held-out calibration origins, sigmoid calibration improved appearance
+Brier score from 0.1061 to 0.1025 and start Brier score from 0.1140 to 0.1085.
 
 This establishes that the modelling pipeline can beat its simple baselines on
 the sampled origins. Opponent strength provides modest gains rather than a
@@ -531,8 +699,9 @@ pytest
 
 Tests cover endpoint handling, normalization, snapshot persistence, leakage-safe
 features, temporal model validation, historical backfill, squad legality,
-availability adjustment, projection aggregation, reference reproducibility, and
-percentile ratings.
+availability adjustment, projection aggregation, reference reproducibility,
+percentile ratings, calibrated participation, automatic substitutions, and
+exact squad optimization.
 
 ## Project layout
 
@@ -571,8 +740,10 @@ through the starting XI and captain rules, creates reproducible reference
 populations, and converts projected positional and overall points into 0–100
 percentile ratings.
 
-The next larger increments are manager-team import, screenshot OCR, a user
-interface, and a constrained recommendation optimizer for transfers, starting
-XIs, benches, and captaincy. Recommendations will reuse the same current
-snapshot, predictions, availability logic, and legal squad constraints, so they
-can update throughout the season as new snapshots and models are produced.
+The exact optimizer now builds squads and bounded-transfer improvements with
+sell-value affordability, saved free transfers, and transfer hits. The next
+larger increments are manager-team import, editable screenshot OCR, and a user
+interface. Recommendations reuse
+the same current snapshot, predictions, availability logic, and legal squad
+constraints, so they update throughout the season as new snapshots and models
+are produced.

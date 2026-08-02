@@ -1,0 +1,30 @@
+name: Test application
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install OCR dependency
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - name: Install project
+        run: pip install -e '.[dev,web]'
+      - name: Verify serving bundle
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from fpl_predictions.serving.bundle import load_serving_bundle
+          bundle = load_serving_bundle(Path("deployment/current"))
+          print(bundle.manifest["model_runs"])
+          PY
+      - name: Run tests
+        run: pytest -q

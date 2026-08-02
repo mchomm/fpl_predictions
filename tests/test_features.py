@@ -70,8 +70,12 @@ def test_past_features_and_future_labels_respect_boundary() -> None:
     assert result.loc[101, "recent_minutes_mean_3"] == pytest.approx(60)
     assert result.loc[101, "label_next_1_gameweek"] == 4
     assert result.loc[101, "label_minutes_next_1_gameweek"] == 90
+    assert result.loc[101, "label_appearances_next_1_gameweek"] == 1
+    assert result.loc[101, "label_starts_next_1_gameweek"] == 1
     assert result.loc[101, "label_next_3_gameweeks"] == 15
     assert result.loc[101, "label_minutes_next_3_gameweeks"] == 270
+    assert result.loc[101, "label_appearances_next_3_gameweeks"] == 3
+    assert result.loc[101, "label_starts_next_3_gameweeks"] == 3
     assert result.loc[101, "label_next_5_gameweeks"] == 30
 
 
@@ -136,6 +140,7 @@ def test_incomplete_future_horizon_has_null_label() -> None:
     assert result.loc[101, "label_next_1_gameweek"] == 4
     assert pd.isna(result.loc[101, "label_next_3_gameweeks"])
     assert pd.isna(result.loc[101, "label_minutes_next_3_gameweeks"])
+    assert pd.isna(result.loc[101, "label_appearances_next_3_gameweeks"])
     assert pd.isna(result.loc[101, "label_next_5_gameweeks"])
 
 

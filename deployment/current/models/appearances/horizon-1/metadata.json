@@ -1,0 +1,171 @@
+{
+  "artifact_version": 1,
+  "created_at_utc": "2026-08-02T15:52:44.803830+00:00",
+  "horizon_gameweeks": 1,
+  "target": "label_appearances_next_1_gameweek",
+  "target_kind": "appearances",
+  "selected_model": "recent_appearances_with_model_fallback",
+  "feature_schema": {
+    "numeric": [
+      "price",
+      "total_points",
+      "minutes",
+      "starts",
+      "goals_scored",
+      "assists",
+      "clean_sheets",
+      "goals_conceded",
+      "own_goals",
+      "penalties_saved",
+      "penalties_missed",
+      "yellow_cards",
+      "red_cards",
+      "saves",
+      "bonus",
+      "bps",
+      "influence",
+      "creativity",
+      "threat",
+      "ict_index",
+      "expected_goals",
+      "expected_assists",
+      "expected_goal_involvements",
+      "expected_goals_conceded",
+      "recent_points_mean_3",
+      "recent_minutes_mean_3",
+      "recent_appearance_rate_3",
+      "recent_start_rate_3",
+      "recent_gameweeks_available",
+      "upcoming_fixture_count_1",
+      "upcoming_home_fixture_count_1",
+      "upcoming_away_fixture_count_1",
+      "upcoming_fixture_count_3",
+      "upcoming_home_fixture_count_3",
+      "upcoming_away_fixture_count_3",
+      "upcoming_fixture_count_5",
+      "upcoming_home_fixture_count_5",
+      "upcoming_away_fixture_count_5",
+      "club_attack_strength",
+      "club_goals_conceded_strength",
+      "club_strength_matches",
+      "upcoming_opponent_attack_strength_mean_1",
+      "upcoming_opponent_goals_conceded_strength_mean_1",
+      "upcoming_attacking_fixture_factor_mean_1",
+      "upcoming_defensive_fixture_factor_mean_1",
+      "upcoming_opponent_attack_strength_mean_3",
+      "upcoming_opponent_goals_conceded_strength_mean_3",
+      "upcoming_attacking_fixture_factor_mean_3",
+      "upcoming_defensive_fixture_factor_mean_3",
+      "upcoming_opponent_attack_strength_mean_5",
+      "upcoming_opponent_goals_conceded_strength_mean_5",
+      "upcoming_attacking_fixture_factor_mean_5",
+      "upcoming_defensive_fixture_factor_mean_5"
+    ],
+    "categorical": [
+      "position_short_name",
+      "club_name"
+    ]
+  },
+  "training_rows": 80930,
+  "training_cutoff": "2025-05-25T15:00:00+00:00",
+  "training_coverage": [
+    {
+      "season": "2022-23",
+      "first_gameweek": 1,
+      "last_gameweek": 38,
+      "snapshot_gameweeks": 37
+    },
+    {
+      "season": "2023-24",
+      "first_gameweek": 1,
+      "last_gameweek": 38,
+      "snapshot_gameweeks": 38
+    },
+    {
+      "season": "2024-25",
+      "first_gameweek": 1,
+      "last_gameweek": 38,
+      "snapshot_gameweeks": 38
+    }
+  ],
+  "source_training_tables": [
+    "/home/mchomm/Documents/fpl_predictions/data/processed/historical_backfill/20260802T154739570538Z/training.parquet"
+  ],
+  "random_seed": 42,
+  "minimum_feature_coverage": 0.5,
+  "evaluation": {
+    "folds": 12,
+    "eligible_folds": 105,
+    "min_train_periods": 8,
+    "leaderboard": [
+      {
+        "model": "recent_appearances_with_model_fallback",
+        "rows": 8823,
+        "mae": 0.1608317202989416,
+        "rmse": 0.3326017159791046,
+        "correlation": 0.747713584728122,
+        "ranking_correlation": 0.7532792015343027,
+        "mean_prediction": 0.39013760948806964,
+        "mean_actual": 0.4024708149155616
+      },
+      {
+        "model": "recent_appearances_mean",
+        "rows": 8823,
+        "mae": 0.16197753380303248,
+        "rmse": 0.3335334495961164,
+        "correlation": 0.7460882101368571,
+        "ranking_correlation": 0.7521147358709563,
+        "mean_prediction": 0.39124395082570984,
+        "mean_actual": 0.4024708149155616
+      },
+      {
+        "model": "random_forest_without_team_strength",
+        "rows": 8823,
+        "mae": 0.19823094092557,
+        "rmse": 0.3132956459103591,
+        "correlation": 0.7693388167708641,
+        "ranking_correlation": 0.731395999668194,
+        "mean_prediction": 0.4023828319298448,
+        "mean_actual": 0.4024708149155616
+      },
+      {
+        "model": "random_forest",
+        "rows": 8823,
+        "mae": 0.20057423187966428,
+        "rmse": 0.31391660452424336,
+        "correlation": 0.7683296881812939,
+        "ranking_correlation": 0.7302767288779722,
+        "mean_prediction": 0.40210396017875377,
+        "mean_actual": 0.4024708149155616
+      },
+      {
+        "model": "ridge",
+        "rows": 8823,
+        "mae": 0.20807446963982545,
+        "rmse": 0.3207079515521617,
+        "correlation": 0.7567166021307792,
+        "ranking_correlation": 0.7219279591413774,
+        "mean_prediction": 0.3961561408580263,
+        "mean_actual": 0.4024708149155616
+      },
+      {
+        "model": "historical_mean",
+        "rows": 8823,
+        "mae": 0.48536691791386805,
+        "rmse": 0.49070667347481284,
+        "correlation": 0.04402749039642471,
+        "ranking_correlation": null,
+        "mean_prediction": 0.4301767314216571,
+        "mean_actual": 0.4024708149155616
+      }
+    ]
+  },
+  "probability_calibration": {
+    "method": "sigmoid_logistic",
+    "source": "out_of-fold temporal predictions",
+    "audit_rows": 2972,
+    "audit_origins": 4,
+    "audit_brier_raw": 0.10612577139487897,
+    "audit_brier_calibrated": 0.10246052620992696
+  }
+}

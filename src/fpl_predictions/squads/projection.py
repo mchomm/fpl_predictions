@@ -216,6 +216,14 @@ def player_projection_details(
                 expected_minutes
                 - first_minutes * (1.0 - float(row["availability_factor"]))
             )
+        if "appearance_probability_1" in indexed:
+            item["appearance_probability_next_gameweek"] = float(
+                row["appearance_probability_1"]
+            )
+        if "start_probability_1" in indexed:
+            item["start_probability_next_gameweek"] = float(
+                row["start_probability_1"]
+            )
         details.append(item)
     return details
 
