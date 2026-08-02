@@ -365,12 +365,15 @@ python scripts/recognize_screenshot.py \
   --output outputs/recognitions/max-palmer/squad.json
 ```
 
-The command normalizes a clean FPL `Pick Team` screenshot, OCRs every possible
-legal formation layout, and solves an exact assignment against the current
-player snapshot. The assignment requires 15 unique players, the official
-position totals, no more than the current club limit, and 11 positionally legal
-starters. It separately detects the `C` and `V` badges. Shirt imagery and
-fixture text are not treated as facts.
+The command detects the pitch and player nameplates from the uploaded image,
+so it does not require one resolution or a formation flag. It treats the 11
+nameplates above the substitute tray as starters and the four lower nameplates
+as the bench, OCRs their names, and solves an exact assignment against the
+current player snapshot. The assignment requires 15 unique players, the
+official position totals, no more than the current club limit, and 11
+positionally legal starters; the formation is inferred from those players. It
+separately detects the `C` and `V` badges. Shirt imagery and fixture text are
+not treated as player facts.
 
 Two files are written: a normal squad JSON accepted by the rating and optimizer
 commands, and a `.recognition.json` audit. The audit keeps every OCR reading,
@@ -383,7 +386,7 @@ Corrections use stable slot IDs from the audit:
 ```json
 {
   "slots": {
-    "starter:MID:1": 154,
+    "starter:5": 154,
     "bench:3": 212
   },
   "captain": 411,
@@ -391,11 +394,12 @@ Corrections use stable slot IDs from the audit:
 }
 ```
 
-Pass the file with `--corrections corrections.json` and rerun recognition. For
-a photograph containing borders around the phone, `--screen-box X Y WIDTH
-HEIGHT` crops the phone screen before recognition. Perspective rectification
-is not part of this first local version, so strongly angled phone photographs
-may still require a manually straightened crop or user corrections.
+Pass the file with `--corrections corrections.json` and rerun recognition.
+Surrounding horizontal borders are removed automatically when the pitch can be
+located. For a difficult photograph, `--screen-box X Y WIDTH HEIGHT` remains
+available to crop the phone screen explicitly. Strong perspective distortion,
+glare over player names, a partially hidden bench, or a player absent from the
+deployed snapshot can still require user corrections.
 
 ## Streamlit web application
 

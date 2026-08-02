@@ -17,7 +17,7 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 from PIL import Image, ImageOps
-from scipy.ndimage import find_objects, label
+from scipy.ndimage import find_objects, label, maximum_filter, uniform_filter
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import lil_matrix
 
@@ -25,17 +25,7 @@ from fpl_predictions.squads.rules import SquadRules
 from fpl_predictions.squads.schemas import SquadSelection
 from fpl_predictions.squads.validation import validate_squad
 
-NORMALIZED_SIZE = (471, 1024)
-ROW_Y = {"GKP": 0.412, "DEF": 0.537, "MID": 0.661, "FWD": 0.786}
-COUNT_X = {
-    1: (0.500,),
-    2: (0.333, 0.667),
-    3: (0.293, 0.500, 0.707),
-    4: (0.161, 0.391, 0.607, 0.833),
-    5: (0.100, 0.300, 0.500, 0.700, 0.900),
-}
-BENCH_X = (0.161, 0.386, 0.601, 0.839)
-BENCH_Y = 0.956
+NORMALIZED_WIDTH = 471
 
 
 class ScreenshotRecognitionError(RuntimeError):
@@ -50,6 +40,17 @@ class OCRSlot:
     x: float
     y: float
     readings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NameplateCandidate:
+    """A visually detected player nameplate."""
+
+    x: float
+    y: float
+    width: float
+    height: float
+    visual_score: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,58 +78,27 @@ def recognize_screenshot(
     normalized = _normalize_image(image_path, screen_box)
     correction_slots = _correction_slots(corrections)
 
-    position_rules = rules.position_by_short_name
-    formations = _legal_formations(rules)
-    cache: dict[tuple[str, int, int], OCRSlot] = {}
-    bench_slots = tuple(
-        _read_slot(
+    starter_plates, bench_plates, layout_audit = _detect_nameplates(normalized)
+    slots = tuple(
+        _read_nameplate(
+            normalized,
+            executable,
+            f"starter:{index + 1}",
+            "starter",
+            plate,
+        )
+        for index, plate in enumerate(starter_plates)
+    ) + tuple(
+        _read_nameplate(
             normalized,
             executable,
             f"bench:{index + 1}",
             "bench",
-            None,
-            x,
-            BENCH_Y,
-            width=0.19,
+            plate,
         )
-        for index, x in enumerate(BENCH_X)
+        for index, plate in enumerate(bench_plates)
     )
-
-    solutions: list[tuple[float, dict[str, Any]]] = []
-    for formation in formations:
-        starter_slots: list[OCRSlot] = []
-        for position in ("GKP", "DEF", "MID", "FWD"):
-            count = formation[position]
-            for index, x in enumerate(COUNT_X[count]):
-                key = (position, count, index)
-                if key not in cache:
-                    cache[key] = _read_slot(
-                        normalized,
-                        executable,
-                        f"starter:{position}:{index + 1}",
-                        "starter",
-                        position,
-                        x,
-                        ROW_Y[position],
-                        width=_slot_width(count),
-                    )
-                starter_slots.append(cache[key])
-        slots = tuple(starter_slots) + bench_slots
-        try:
-            assignment = _assign_players(
-                slots,
-                players,
-                rules,
-                correction_slots,
-            )
-        except ScreenshotRecognitionError:
-            continue
-        solutions.append((assignment["objective"], assignment))
-    if not solutions:
-        raise ScreenshotRecognitionError(
-            "OCR readings could not be resolved into any legal FPL squad"
-        )
-    _, best = max(solutions, key=lambda item: item[0])
+    best = _assign_players(slots, players, rules, correction_slots)
     assigned = best["assigned"]
     low_confidence = [
         record for record in assigned if record["match_score"] < minimum_match_score
@@ -164,11 +134,15 @@ def recognize_screenshot(
     validated = validate_squad(selection, players, rules)
     audit = {
         "schema_version": 1,
-        "method": "local Tesseract OCR plus exact FPL constraint optimization",
+        "method": (
+            "dynamic nameplate detection, local Tesseract OCR, and exact FPL "
+            "constraint optimization"
+        ),
         "image": str(image_path.resolve()),
         "image_sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
-        "normalized_size": list(NORMALIZED_SIZE),
+        "normalized_size": list(normalized.size),
         "screen_box": list(screen_box) if screen_box is not None else None,
+        "layout_detection": layout_audit,
         "formation": validated.formation,
         "total_cost": validated.total_cost,
         "minimum_match_score": minimum_match_score,
@@ -193,7 +167,7 @@ def recognize_screenshot(
         },
         "slots": assigned,
         "correction_format": {
-            "slots": {"starter:MID:1": 154},
+            "slots": {"starter:1": 154},
             "captain": 411,
             "vice_captain": 154,
         },
@@ -217,7 +191,7 @@ def _normalize_image(
     path: Path,
     screen_box: tuple[int, int, int, int] | None,
 ) -> Image.Image:
-    image = Image.open(path).convert("RGB")
+    image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
     if screen_box is not None:
         left, top, width, height = screen_box
         if left < 0 or top < 0 or width <= 0 or height <= 0:
@@ -225,44 +199,303 @@ def _normalize_image(
         if left + width > image.width or top + height > image.height:
             raise ValueError("screen_box extends beyond the image")
         image = image.crop((left, top, left + width, top + height))
-    return image.resize(NORMALIZED_SIZE, Image.Resampling.LANCZOS)
+    else:
+        pixels = np.asarray(image)
+        red = pixels[:, :, 0].astype(float)
+        green = pixels[:, :, 1].astype(float)
+        blue = pixels[:, :, 2].astype(float)
+        pitch = (
+            (green > 65)
+            & (green > red * 1.12)
+            & (green > blue * 1.03)
+        )
+        components, count = label(pitch)
+        if count:
+            sizes = np.bincount(components.ravel())
+            sizes[0] = 0
+            pitch_id = int(sizes.argmax())
+            _, pitch_x = np.where(components == pitch_id)
+            detected_width = int(pitch_x.max() - pitch_x.min() + 1)
+            if detected_width < image.width * 0.88:
+                padding = round(detected_width * 0.025)
+                left = max(0, int(pitch_x.min()) - padding)
+                right = min(image.width, int(pitch_x.max()) + padding + 1)
+                image = image.crop((left, 0, right, image.height))
+    if image.width == NORMALIZED_WIDTH:
+        return image
+    height = max(1, round(image.height * NORMALIZED_WIDTH / image.width))
+    return image.resize((NORMALIZED_WIDTH, height), Image.Resampling.LANCZOS)
 
 
-def _read_slot(
+def _detect_nameplates(
+    image: Image.Image,
+) -> tuple[tuple[NameplateCandidate, ...], tuple[NameplateCandidate, ...], dict[str, Any]]:
+    """Find 11 starter and four bench nameplates without assuming a formation."""
+    pixels = np.asarray(image)
+    red = pixels[:, :, 0].astype(float)
+    green = pixels[:, :, 1].astype(float)
+    blue = pixels[:, :, 2].astype(float)
+    pitch_mask = (
+        (green > 65)
+        & (green > red * 1.12)
+        & (green > blue * 1.03)
+    )
+    components, count = label(pitch_mask)
+    if count == 0:
+        raise ScreenshotRecognitionError(
+            "Could not locate the FPL pitch; upload the full Pick Team screen"
+        )
+    component_sizes = np.bincount(components.ravel())
+    component_sizes[0] = 0
+    pitch_id = int(component_sizes.argmax())
+    pitch_y, pitch_x = np.where(components == pitch_id)
+    pitch_width = int(pitch_x.max() - pitch_x.min() + 1)
+    if pitch_width < max(120, round(image.width * 0.25)):
+        raise ScreenshotRecognitionError(
+            "The detected FPL pitch is too small for reliable player OCR"
+        )
+
+    plate_width = max(34, round(pitch_width * 0.16))
+    plate_height = max(16, round(pitch_width * 0.072))
+    lower_top = max(0, int(pitch_y.min() + pitch_width * 0.07))
+    lower = pixels[lower_top:]
+    lower_brightness = lower.min(axis=2)
+    bright_threshold = float(
+        np.clip(np.percentile(lower_brightness, 78), 145, 215)
+    )
+    minimum = pixels.min(axis=2).astype(float)
+    maximum = pixels.max(axis=2).astype(float)
+    neutral = (
+        (minimum >= bright_threshold)
+        & ((maximum - minimum) <= np.maximum(38, maximum * 0.20))
+    )
+    luminance = red * 0.299 + green * 0.587 + blue * 0.114
+    dark = luminance < min(165.0, bright_threshold * 0.76)
+
+    white_density = uniform_filter(
+        neutral.astype(float), size=(plate_height, plate_width), mode="constant"
+    )
+    dark_density = uniform_filter(
+        dark.astype(float), size=(plate_height, plate_width), mode="constant"
+    )
+    # Player labels are bright, mostly neutral rectangles with roughly ten per
+    # cent dark glyph pixels. Penalizing blank white areas prevents the page
+    # background and shirt highlights from winning.
+    score = white_density - 3.0 * np.abs(dark_density - 0.10)
+    allowed = np.zeros(score.shape, dtype=bool)
+    x_padding = round(pitch_width * 0.06)
+    x_start = max(plate_width // 2, int(pitch_x.min()) - x_padding)
+    x_stop = min(
+        image.width - plate_width // 2,
+        int(pitch_x.max()) + x_padding + 1,
+    )
+    y_start = max(plate_height // 2, lower_top)
+    y_stop = image.height - plate_height // 2
+    allowed[y_start:y_stop, x_start:x_stop] = True
+    score[
+        (~allowed)
+        | (white_density < 0.48)
+        | (dark_density < 0.035)
+        | (dark_density > 0.24)
+    ] = -1.0
+
+    local_maximum = maximum_filter(
+        score,
+        size=(max(5, plate_height // 2), max(7, plate_width // 2)),
+        mode="constant",
+        cval=-1.0,
+    )
+    maxima_y, maxima_x = np.where(
+        (score == local_maximum) & (score >= 0.22)
+    )
+    ranked = sorted(
+        (
+            NameplateCandidate(
+                x=float(x),
+                y=float(y),
+                width=float(plate_width),
+                height=float(plate_height),
+                visual_score=float(score[y, x]),
+            )
+            for y, x in zip(maxima_y, maxima_x, strict=True)
+        ),
+        key=lambda candidate: (-candidate.visual_score, candidate.y, candidate.x),
+    )
+    candidates: list[NameplateCandidate] = []
+    for candidate in ranked:
+        if any(
+            abs(candidate.x - chosen.x) < plate_width * 0.65
+            and abs(candidate.y - chosen.y) < plate_height * 0.70
+            for chosen in candidates
+        ):
+            continue
+        candidates.append(candidate)
+        if len(candidates) >= 60:
+            break
+
+    rows = _cluster_nameplate_rows(candidates, plate_height)
+    bench_options = [row for row in rows if len(row) >= 4]
+    if not bench_options:
+        raise ScreenshotRecognitionError(
+            "Could not find the row of four substitute nameplates"
+        )
+    pitch_bottom = float(pitch_y.max())
+    bench_row = min(
+        bench_options,
+        key=lambda row: abs(
+            float(np.median([candidate.y for candidate in row])) - pitch_bottom
+        ),
+    )
+    # Bench name and fixture text can merge into one candidate row. The four
+    # maxima nearest the bottom of the detected pitch consistently identify
+    # the name line; translate that line back to the plate centre expected by
+    # _read_nameplate.
+    bench_name_candidates = sorted(
+        bench_row, key=lambda candidate: abs(candidate.y - pitch_bottom)
+    )[:4]
+    bench_name_y = float(
+        np.median([candidate.y for candidate in bench_name_candidates])
+    )
+    bench_y = bench_name_y + plate_height * 0.17
+    # The substitute tray always contains four columns, but its absolute
+    # coordinates and pixel size vary by device. Derive those columns from the
+    # detected pitch width instead of trusting local maxima that can drift into
+    # the pale bench background near the bottom of the image.
+    bench_centers = np.linspace(
+        float(pitch_x.min()) + pitch_width * 0.16,
+        float(pitch_x.max()) - pitch_width * 0.16,
+        4,
+    )
+    bench = [
+        NameplateCandidate(
+            x=float(center),
+            y=bench_y,
+            width=float(plate_width),
+            height=float(plate_height),
+            visual_score=max(
+                (
+                    candidate.visual_score
+                    for candidate in bench_row
+                    if abs(candidate.x - center) <= plate_width
+                ),
+                default=0.0,
+            ),
+        )
+        for center in bench_centers
+    ]
+
+    starter_pool: list[NameplateCandidate] = []
+    for row in rows:
+        row_y = float(np.mean([candidate.y for candidate in row]))
+        if row_y >= bench_y - plate_height * 1.1:
+            continue
+        starter_pool.extend(
+            sorted(row, key=lambda item: item.visual_score, reverse=True)[:5]
+        )
+    selected_starters = sorted(
+        starter_pool, key=lambda item: item.visual_score, reverse=True
+    )[:11]
+    starters = [
+        candidate
+        for row in _cluster_nameplate_rows(selected_starters, plate_height)
+        for candidate in sorted(row, key=lambda item: item.x)
+    ]
+    if len(starters) != 11 or len(bench) != 4:
+        raise ScreenshotRecognitionError(
+            f"Detected {len(starters)} starter and {len(bench)} substitute "
+            "nameplates; expected 11 and 4. Candidate row counts were "
+            f"{[len(row) for row in rows]}"
+        )
+
+    return (
+        tuple(starters),
+        tuple(bench),
+        {
+            "method": "adaptive bright-nameplate detection",
+            "pitch_bounds": [
+                int(pitch_x.min()),
+                int(pitch_y.min()),
+                int(pitch_x.max() + 1),
+                int(pitch_y.max() + 1),
+            ],
+            "plate_size": [plate_width, plate_height],
+            "bright_threshold": bright_threshold,
+            "candidate_count": len(candidates),
+            "candidate_centers": [
+                [round(item.x, 1), round(item.y, 1), round(item.visual_score, 4)]
+                for item in sorted(candidates, key=lambda item: (item.y, item.x))
+            ],
+            "detected_row_counts": [len(row) for row in rows],
+            "starter_centers": [[round(item.x, 1), round(item.y, 1)] for item in starters],
+            "bench_centers": [[round(item.x, 1), round(item.y, 1)] for item in bench],
+        },
+    )
+
+
+def _cluster_nameplate_rows(
+    candidates: list[NameplateCandidate],
+    plate_height: int,
+) -> list[list[NameplateCandidate]]:
+    """Cluster candidates into visual rows while tolerating mild perspective."""
+    rows: list[list[NameplateCandidate]] = []
+    for candidate in sorted(candidates, key=lambda item: (item.y, item.x)):
+        matching = next(
+            (
+                row
+                for row in rows
+                if abs(candidate.y - np.median([item.y for item in row]))
+                <= plate_height * 0.85
+            ),
+            None,
+        )
+        if matching is None:
+            rows.append([candidate])
+        else:
+            matching.append(candidate)
+    return rows
+
+
+def _read_nameplate(
     image: Image.Image,
     command: str,
     slot_id: str,
     role: str,
-    expected_position: str | None,
-    x_ratio: float,
-    y_ratio: float,
-    *,
-    width: float,
+    plate: NameplateCandidate,
 ) -> OCRSlot:
-    x = round(image.width * x_ratio)
-    y = round(image.height * y_ratio)
-    crop_width = round(image.width * width)
-    crop_height = round(image.height * 0.018)
+    """OCR the name line within one detected nameplate."""
+    crop_width = round(plate.width * 1.12)
+    crop_height = max(12, round(plate.height * 0.62))
+    center_y = round(plate.y - plate.height * 0.17)
+    center_x = round(plate.x)
     box = (
-        max(x - crop_width // 2, 0),
-        max(y - crop_height // 2, 0),
-        min(x + crop_width // 2, image.width),
-        min(y + crop_height // 2, image.height),
+        max(center_x - crop_width // 2, 0),
+        max(center_y - crop_height // 2, 0),
+        min(center_x + crop_width // 2, image.width),
+        min(center_y + crop_height // 2, image.height),
     )
     crop = image.crop(box)
     readings = []
-    for threshold in (45, 55, 65):
+    grayscale = ImageOps.grayscale(crop)
+    raw = grayscale.resize(
+        (grayscale.width * 6, grayscale.height * 6),
+        Image.Resampling.LANCZOS,
+    )
+    for psm in (7, 11):
+        text = _run_tesseract(command, raw, psm=psm)
+        if text and text not in readings:
+            readings.append(text)
+    for threshold in (40, 50, 60, 70):
         processed = _threshold_crop(crop, threshold, scale=6)
         text = _run_tesseract(command, processed, psm=7)
         if text and text not in readings:
             readings.append(text)
     return OCRSlot(
-        slot_id,
-        role,
-        expected_position,
-        x_ratio,
-        y_ratio,
-        tuple(readings),
+        slot_id=slot_id,
+        role=role,
+        expected_position=None,
+        x=plate.x / image.width,
+        y=plate.y / image.height,
+        readings=tuple(readings),
     )
 
 
@@ -314,34 +547,6 @@ def _resolve_executable(command: str) -> str:
         f"OCR executable not found: {command!r}. Install tesseract-ocr or pass "
         "--tesseract-command."
     )
-
-
-def _legal_formations(rules: SquadRules) -> tuple[dict[str, int], ...]:
-    counts = {"GKP": 1}
-    positions = rules.position_by_short_name
-    formations = []
-    for defenders in range(
-        positions["DEF"].minimum_starters,
-        positions["DEF"].maximum_starters + 1,
-    ):
-        for midfielders in range(
-            positions["MID"].minimum_starters,
-            positions["MID"].maximum_starters + 1,
-        ):
-            forwards = rules.starting_size - 1 - defenders - midfielders
-            if (
-                positions["FWD"].minimum_starters
-                <= forwards
-                <= positions["FWD"].maximum_starters
-            ):
-                formations.append(
-                    {**counts, "DEF": defenders, "MID": midfielders, "FWD": forwards}
-                )
-    return tuple(formations)
-
-
-def _slot_width(count: int) -> float:
-    return {1: 0.24, 2: 0.22, 3: 0.19, 4: 0.165, 5: 0.145}[count]
 
 
 def _assign_players(
@@ -437,6 +642,19 @@ def _assign_players(
                 position.squad_count,
             )
         )
+        starter_indexes = [
+            index
+            for index, record in enumerate(records)
+            if record["position"] == position.short_name.upper()
+            and record["slot"].role == "starter"
+        ]
+        constraints.append(
+            (
+                {index: 1.0 for index in starter_indexes},
+                position.minimum_starters,
+                position.maximum_starters,
+            )
+        )
 
     matrix = lil_matrix((len(constraints), variable_count), dtype=float)
     lower = np.empty(len(constraints))
@@ -500,11 +718,15 @@ def _player_match_score(readings: tuple[str, ...], row: Any) -> float:
         if hasattr(row, column) and pd.notna(getattr(row, column))
     }
     scores = [
-        _text_similarity(reading, alias)
+        max((_text_similarity(reading, alias) for alias in aliases), default=0.0)
         for reading in readings
-        for alias in aliases
     ]
-    return max(scores, default=0.0)
+    if not scores:
+        return 0.0
+    # A single OCR pass can hallucinate a different short player name. Blend
+    # the best pass with cross-pass consensus so one accidental exact token
+    # cannot beat a consistently near-exact reading of the real name.
+    return float(0.55 * max(scores) + 0.45 * np.median(scores))
 
 
 def _text_similarity(observed: str, expected: str) -> float:
@@ -585,12 +807,15 @@ def _detect_markers(
                     min(y_slice.stop + padding, image.height),
                 )
             )
-            processed = _threshold_crop(crop, 55, scale=10)
-            marker = _run_tesseract(
-                command, processed, psm=10, whitelist="CV"
-            ).upper()
-            if marker in {"C", "V"} and marker not in detected:
-                detected[marker] = int(record["player_id"])
+            for threshold in (25, 40, 55, 65):
+                processed = _threshold_crop(crop, threshold, scale=10)
+                marker = _run_tesseract(
+                    command, processed, psm=10, whitelist="CV"
+                ).upper()
+                if marker in {"C", "V"} and marker not in detected:
+                    detected[marker] = int(record["player_id"])
+                    break
+            if int(record["player_id"]) in detected.values():
                 break
     return detected
 

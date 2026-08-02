@@ -8,11 +8,13 @@ from pathlib import Path
 import shutil
 
 import pandas as pd
+from PIL import Image
 import pytest
 
 from fpl_predictions.screenshot.recognition import (
     OCRSlot,
     _assign_players,
+    _detect_nameplates,
     _text_similarity,
     recognize_screenshot,
 )
@@ -79,6 +81,44 @@ def test_assignment_uses_positions_and_squad_rules_for_ambiguous_names() -> None
     not Path("examples/max_palmer_version.jpeg").is_file(),
     reason="real screenshot fixture is not available",
 )
+def test_nameplate_detection_is_independent_of_pixel_dimensions_and_header() -> None:
+    image = Image.open("examples/max_palmer_version.jpeg").convert("RGB")
+    cases = (
+        image,
+        image.resize((824, 1792), Image.Resampling.LANCZOS),
+        image.crop((0, 120, image.width, image.height)),
+    )
+
+    for case in cases:
+        starters, bench, audit = _detect_nameplates(case)
+
+        assert len(starters) == 11
+        assert len(bench) == 4
+        assert max(item.y for item in starters) < min(item.y for item in bench)
+        assert audit["plate_size"][0] > audit["plate_size"][1]
+
+
+@pytest.mark.skipif(
+    not Path("examples/max_palmer_version.jpeg").is_file(),
+    reason="real screenshot fixture is not available",
+)
+def test_nameplate_detection_ignores_surrounding_photo_background() -> None:
+    image = Image.open("examples/max_palmer_version.jpeg").convert("RGB")
+    scaled = image.resize((565, 1229), Image.Resampling.LANCZOS)
+    photograph = Image.new("RGB", (900, 1500), (12, 12, 12))
+    photograph.paste(scaled, (170, 100))
+
+    starters, bench, _ = _detect_nameplates(photograph)
+
+    assert len(starters) == 11
+    assert len(bench) == 4
+    assert [round(item.x) for item in bench] == [260, 388, 516, 644]
+
+
+@pytest.mark.skipif(
+    not Path("examples/max_palmer_version.jpeg").is_file(),
+    reason="real screenshot fixture is not available",
+)
 def test_real_max_palmer_screenshot_matches_annotation() -> None:
     command = os.environ.get("FPL_TEST_TESSERACT") or shutil.which("tesseract")
     if not command:
@@ -102,4 +142,43 @@ def test_real_max_palmer_screenshot_matches_annotation() -> None:
     assert result.selection.captain == expected["captain"]
     assert result.selection.vice_captain == expected["vice_captain"]
     assert result.audit["formation"] == "3-4-3"
+    assert all(
+        slot["expected_position"] is None for slot in result.audit["slots"]
+    )
     assert result.audit["review_required"] is False
+
+
+@pytest.mark.skipif(
+    not Path("examples/max_palmer_version.jpeg").is_file(),
+    reason="real screenshot fixture is not available",
+)
+def test_end_to_end_recognition_handles_resized_screenshot_with_border(
+    tmp_path: Path,
+) -> None:
+    command = os.environ.get("FPL_TEST_TESSERACT") or shutil.which("tesseract")
+    if not command:
+        pytest.skip("Tesseract is not installed")
+    original = Image.open("examples/max_palmer_version.jpeg").convert("RGB")
+    scaled = original.resize((565, 1229), Image.Resampling.LANCZOS)
+    photograph = Image.new("RGB", (905, 1429), (12, 12, 12))
+    photograph.paste(scaled, (170, 100))
+    image_path = tmp_path / "resized-with-border.jpg"
+    photograph.save(image_path, quality=90)
+    players = pd.read_parquet(
+        "data/processed/20260730T162356213385Z/players.parquet"
+    )
+
+    result = recognize_screenshot(
+        image_path,
+        players,
+        _rules(),
+        tesseract_command=command,
+    )
+    expected = json.loads(
+        Path("examples/screenshot-squad-max-palmer-2026-27-gw1.json").read_text()
+    )
+
+    assert list(result.selection.player_ids) == expected["player_ids"]
+    assert result.selection.captain == expected["captain"]
+    assert result.selection.vice_captain == expected["vice_captain"]
+    assert result.audit["formation"] == "3-4-3"
