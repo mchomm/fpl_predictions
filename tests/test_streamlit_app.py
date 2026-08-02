@@ -121,3 +121,6 @@ def test_streamlit_blocks_rating_and_improvements_over_budget() -> None:
     assert next(
         item for item in app.button if item.label == "Generate best squad from scratch"
     ).disabled
+    assert next(
+        item for item in app.button if item.label == "Generate strong varied squad"
+    ).disabled

@@ -424,9 +424,17 @@ formation allowed by the current FPL rules and collects all 11 starters, four
 substitutes, captain, vice-captain, and money in the bank. Both input routes
 produce the same validated squad. The main squad and optimizer results are
 shown on a responsive pitch using the official player portrait URLs included
-in the FPL snapshot, with a table retained underneath for detailed review.
+in the FPL snapshot. When an official portrait URL is unavailable, the app
+checks it and displays a neutral player silhouette instead of a broken image.
+The table remains underneath for detailed review.
 Contextual help explains ratings, projections, transfer gains, model training,
 validation metrics, and version information in supporter-friendly language.
+
+The exact generator always returns the highest-projected legal squad for the
+selected horizon. The varied generator adds a small random perturbation around
+the same model forecasts before solving the legal squad problem. This produces
+a different strong squad on each click, while the points shown afterwards are
+always recalculated from the original, unmodified forecasts.
 
 The application reads the immutable `deployment/current/` bundle. The bundle
 contains the active normalized player snapshot, predictions, three precomputed

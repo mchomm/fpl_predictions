@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from fpl_predictions.serving.bundle import ServingBundle
@@ -62,6 +64,49 @@ def optimize_selection(
         free_transfers=free_transfers,
         hit_cost=hit_cost,
         bench_weight=bench_weight,
+    )
+
+
+def sample_strong_selection(
+    bundle: ServingBundle,
+    horizon: int,
+    *,
+    random_seed: int | None = None,
+    variation: float = 0.08,
+) -> OptimizationResult:
+    """Generate a strong legal squad from lightly perturbed model forecasts."""
+    if not 0 < variation <= 0.25:
+        raise ValueError("variation must be greater than 0 and no more than 0.25")
+    points_column = f"predicted_points_{horizon}"
+    if points_column not in bundle.predictions:
+        raise ValueError(f"Predictions do not contain {points_column}")
+
+    rng = np.random.default_rng(random_seed)
+    sampled_predictions = bundle.predictions.copy()
+    points = pd.to_numeric(sampled_predictions[points_column], errors="coerce")
+    noise = rng.normal(loc=0.0, scale=variation, size=len(sampled_predictions))
+    sampled_predictions[points_column] = (points * (1.0 + noise)).clip(lower=0.0)
+
+    sampled = optimize_squad(
+        bundle.players,
+        sampled_predictions,
+        bundle.rules,
+        horizon,
+    )
+    validated = validate_squad(sampled.selection, bundle.players, bundle.rules)
+    actual_projection = project_squad(
+        validated,
+        bundle.predictions,
+        bundle.rules,
+        horizon,
+    )
+    return replace(
+        sampled,
+        projection=actual_projection,
+        objective_points=actual_projection.overall_points,
+        solver_message=(
+            f"Strong varied squad sampled from model forecasts. {sampled.solver_message}"
+        ),
     )
 
 

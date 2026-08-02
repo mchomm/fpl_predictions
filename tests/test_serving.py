@@ -15,7 +15,11 @@ from fpl_predictions.serving.bundle import (
     ServingBundleError,
     load_serving_bundle,
 )
-from fpl_predictions.serving.services import optimize_selection, rate_selection
+from fpl_predictions.serving.services import (
+    optimize_selection,
+    rate_selection,
+    sample_strong_selection,
+)
 from fpl_predictions.squads.rules import SquadRules
 from fpl_predictions.squads.schemas import SquadSelection
 
@@ -155,3 +159,20 @@ def test_serving_services_rate_and_optimize() -> None:
     assert 0 <= rating.scores["overall"] < 100
     assert len(details) == 15
     assert len(optimized.selection.player_ids) == 15
+
+
+@pytest.mark.skipif(
+    not Path("deployment/current/manifest.json").is_file(),
+    reason="serving bundle is not available",
+)
+def test_strong_varied_squads_are_reproducible_and_high_scoring() -> None:
+    bundle = load_serving_bundle(Path("deployment/current"))
+    best = optimize_selection(bundle, 3)
+    first = sample_strong_selection(bundle, 3, random_seed=0)
+    repeated = sample_strong_selection(bundle, 3, random_seed=0)
+    second = sample_strong_selection(bundle, 3, random_seed=1)
+
+    assert first.selection == repeated.selection
+    assert first.selection != second.selection
+    assert first.projection.overall_points >= 0.9 * best.projection.overall_points
+    assert second.projection.overall_points >= 0.9 * best.projection.overall_points

@@ -13,6 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import requests
 import streamlit as st
 
 # Community Cloud runs this entrypoint from the repository root. Add the
@@ -41,6 +42,7 @@ from fpl_predictions.serving.presentation import (  # noqa: E402
 from fpl_predictions.serving.services import (  # noqa: E402
     optimize_selection,
     rate_selection,
+    sample_strong_selection,
 )
 from fpl_predictions.squads.schemas import SquadSelection  # noqa: E402
 from fpl_predictions.squads.validation import (  # noqa: E402
@@ -110,6 +112,24 @@ def _model_metadata(bundle_root: str, horizon: int) -> dict[str, Any]:
         return {}
     value = json.loads(path.read_text(encoding="utf-8"))
     return value if isinstance(value, dict) else {}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _portrait_available(url: str) -> bool:
+    """Check whether the official portrait URL currently serves an image."""
+    try:
+        response = requests.head(
+            url,
+            allow_redirects=True,
+            timeout=(0.8, 2.0),
+            headers={"User-Agent": "FPL-Squad-Lab/1.0"},
+        )
+    except requests.RequestException:
+        # A temporary server-side network issue should not suppress a portrait
+        # that may still load normally in the user's browser.
+        return True
+    content_type = response.headers.get("content-type", "").lower()
+    return response.status_code == 200 and content_type.startswith("image/")
 
 
 def _inject_styles() -> None:
@@ -228,7 +248,6 @@ def _inject_styles() -> None:
           object-fit:contain; object-position:center bottom; }
         .player-silhouette { width:62px; height:70px; display:flex; align-items:flex-end;
           justify-content:center; margin:0 auto; color:#d7dbe2; }
-        .player-silhouette.is-hidden { display:none; }
         .player-silhouette svg { width:58px; height:66px; filter:drop-shadow(0 3px 4px rgba(0,0,0,.18)); }
         .player-label { position:relative; border-radius:9px; overflow:hidden; background:white; }
         .club-band { height:5px; }
@@ -377,10 +396,9 @@ def _friendly_timestamp(value: Any, *, include_time: bool = True) -> str:
     return f"{local.strftime('%B %d, %Y').replace(' 0', ' ')} at {clock} {local.tzname()}"
 
 
-def _silhouette_html(*, hidden: bool = False) -> str:
-    classes = "player-silhouette is-hidden" if hidden else "player-silhouette"
+def _silhouette_html() -> str:
     return (
-        f'<div class="{classes}" aria-hidden="true">'
+        '<div class="player-silhouette" aria-hidden="true">'
         '<svg viewBox="0 0 80 92" xmlns="http://www.w3.org/2000/svg">'
         '<circle cx="40" cy="23" r="16" fill="currentColor"/>'
         '<path d="M12 88c1-24 10-39 28-39s27 15 28 39H12Z" fill="currentColor"/>'
@@ -414,11 +432,10 @@ def _player_card(
     marker_html = (
         f'<span class="captain-chip">{escape(marker)}</span>' if marker else ""
     )
-    if pd.notna(photo) and photo:
-        image_html = _silhouette_html(hidden=True) + (
+    if pd.notna(photo) and photo and _portrait_available(str(photo)):
+        image_html = (
             f'<img class="player-photo" src="{escape(str(photo), quote=True)}" '
-            'alt="" loading="lazy" '
-            'onerror="this.style.display=\'none\';this.previousElementSibling.style.display=\'flex\'">'
+            'alt="" loading="lazy">'
         )
     else:
         image_html = _silhouette_html()
@@ -899,14 +916,38 @@ if selection is None:
             horizon=horizon,
         )
     st.markdown("#### Or let the model start for you")
-    st.caption("Generate the highest-projected legal £100m squad, then edit any player.")
-    if st.button("Generate best possible squad", width="stretch"):
-        with st.spinner("Building the strongest legal squad…"):
-            optimized = optimize_selection(bundle, horizon)
+    st.caption(
+        "Choose the exact highest-projected squad, or generate a different strong "
+        "legal squad each time. You can edit either one afterwards."
+    )
+    generator_cols = st.columns(2)
+    exact_generated = generator_cols[0].button(
+        "Generate best possible squad",
+        width="stretch",
+    )
+    varied_generated = generator_cols[1].button(
+        "Generate a strong varied squad",
+        width="stretch",
+        help=(
+            "Adds a small random variation to the player forecasts before solving "
+            "the same legal squad problem. Displayed points use the original forecasts."
+        ),
+    )
+    if exact_generated or varied_generated:
+        with st.spinner("Building a strong legal squad…"):
+            optimized = (
+                sample_strong_selection(bundle, horizon)
+                if varied_generated
+                else optimize_selection(bundle, horizon)
+            )
         _set_selection(optimized.selection)
-        st.session_state["optimization_result"] = optimized.as_dict(
+        generated_payload = optimized.as_dict(
             bundle.players, bundle.predictions
         )
+        generated_payload["generation_mode"] = (
+            "Strong varied squad" if varied_generated else "Exact best squad"
+        )
+        st.session_state["optimization_result"] = generated_payload
         st.rerun()
     with st.expander("New here? What this app does"):
         st.markdown(
@@ -1172,7 +1213,7 @@ with improve_tab:
         disabled=preseason,
         help="Extra transfers beyond this number cost four projected points each.",
     )
-    improve_col, rebuild_col = st.columns(2)
+    improve_col, rebuild_col, varied_col = st.columns(3)
     improve = improve_col.button(
         "Suggest transfers",
         type="primary",
@@ -1184,29 +1225,52 @@ with improve_tab:
         width="stretch",
         disabled=squad_over_budget,
     )
-    if improve or rebuild:
+    varied = varied_col.button(
+        "Generate strong varied squad",
+        width="stretch",
+        disabled=squad_over_budget,
+        help=(
+            "Creates a different high-scoring legal squad on each click using a "
+            "small random variation around the model forecasts."
+        ),
+    )
+    if improve or rebuild or varied:
         try:
             with st.spinner("Searching all legal combinations…"):
-                optimized = optimize_selection(
-                    bundle,
-                    horizon,
-                    current_squad=(None if rebuild else selection),
-                    max_transfers=(None if rebuild else max_transfers),
-                    free_transfers=(
-                        1
-                        if rebuild
-                        else max_transfers
-                        if preseason
-                        else int(free_transfers)
-                    ),
+                optimized = (
+                    sample_strong_selection(bundle, horizon)
+                    if varied
+                    else optimize_selection(
+                        bundle,
+                        horizon,
+                        current_squad=(None if rebuild else selection),
+                        max_transfers=(None if rebuild else max_transfers),
+                        free_transfers=(
+                            1
+                            if rebuild
+                            else max_transfers
+                            if preseason
+                            else int(free_transfers)
+                        ),
+                    )
                 )
-            st.session_state["optimization_result"] = optimized.as_dict(
+            optimization_payload = optimized.as_dict(
                 bundle.players, bundle.predictions
             )
+            optimization_payload["generation_mode"] = (
+                "Strong varied squad"
+                if varied
+                else "Exact best squad"
+                if rebuild
+                else "Transfer suggestions"
+            )
+            st.session_state["optimization_result"] = optimization_payload
         except (RuntimeError, SquadValidationError, ValueError) as exc:
             st.error(str(exc))
     optimization = st.session_state.get("optimization_result")
     if isinstance(optimization, dict):
+        if optimization.get("generation_mode"):
+            st.caption(f"Result type: {optimization['generation_mode']}")
         projection = optimization["projection"]
         metric_cols = st.columns(4)
         metric_cols[0].metric("Formation", projection["formation"], border=True)
