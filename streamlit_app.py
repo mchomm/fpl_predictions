@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from html import escape
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 import sys
 import tempfile
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -65,6 +67,12 @@ POSITION_NAMES = {
     "DEF": "Defenders",
     "MID": "Midfielders",
     "FWD": "Forwards",
+}
+POSITION_SINGULAR = {
+    "GKP": "Goalkeeper",
+    "DEF": "Defender",
+    "MID": "Midfielder",
+    "FWD": "Forward",
 }
 CLUB_COLOURS = {
     "ARS": ("#ef0107", "#ffffff"),
@@ -129,7 +137,20 @@ def _inject_styles() -> None:
           background: linear-gradient(180deg, #2a032f 0%, #43004a 100%);
         }
         [data-testid="stSidebar"] * { color: #fff; }
-        [data-testid="stSidebar"] [data-baseweb="select"] * { color: #172033; }
+        [data-testid="stSidebar"] [data-baseweb="select"] > div,
+        [data-testid="stSidebar"] [data-baseweb="input"] > div {
+          background: #fff !important; border-color: rgba(255,255,255,.55) !important;
+        }
+        [data-testid="stSidebar"] [data-baseweb="select"] span,
+        [data-testid="stSidebar"] [data-baseweb="select"] input,
+        [data-testid="stSidebar"] [data-baseweb="input"] input {
+          color: #172033 !important; -webkit-text-fill-color: #172033 !important;
+        }
+        [data-baseweb="popover"], [data-baseweb="menu"] { background: #fff !important; }
+        [data-baseweb="popover"] *, [data-baseweb="menu"] * {
+          color: #172033 !important; -webkit-text-fill-color: #172033 !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stWidgetLabel"] * { color:#fff !important; }
         .block-container { max-width: 1240px; padding-top: 2.25rem; }
         h1, h2, h3 { letter-spacing: -.025em; }
         h1 { color: var(--fpl-purple); font-weight: 850 !important; }
@@ -146,6 +167,12 @@ def _inject_styles() -> None:
         .hero-kicker { color: var(--fpl-green); font-weight: 800; font-size: .78rem;
           letter-spacing: .12em; text-transform: uppercase; }
         .hero-copy { max-width: 760px; margin-top: .3rem; font-size: 1.02rem; opacity: .94; }
+        .hero-league-badge { display:inline-flex; align-items:center; gap:.45rem; margin-bottom:.55rem;
+          padding:.28rem .62rem .28rem .32rem; border:1px solid rgba(255,255,255,.25);
+          border-radius:999px; background:rgba(255,255,255,.1); color:#fff; font-size:.74rem;
+          font-weight:750; letter-spacing:.02em; }
+        .hero-league-badge span { display:grid; place-items:center; width:27px; height:27px;
+          border-radius:50%; background:var(--fpl-green); color:#37003c; font-weight:950; }
         div[data-testid="stMetric"] {
           background: var(--panel); border: 1px solid rgba(55,0,60,.09);
           padding: .85rem 1rem; border-radius: 16px;
@@ -162,7 +189,7 @@ def _inject_styles() -> None:
           border: 0; box-shadow: 0 7px 18px rgba(55,0,60,.2);
         }
         .fpl-pitch {
-          position: relative; overflow: hidden; border-radius: 24px;
+          position: relative; overflow: visible; border-radius: 24px;
           padding: 2rem 1rem 1.4rem; margin: .8rem 0 1rem;
           background: repeating-linear-gradient(90deg,#079a51 0,#079a51 12.5%,#06934c 12.5%,#06934c 25%);
           box-shadow: inset 0 0 0 3px rgba(255,255,255,.23), 0 14px 35px rgba(4,82,45,.2);
@@ -177,17 +204,49 @@ def _inject_styles() -> None:
         }
         .pitch-row { position:relative; z-index:1; display:flex; justify-content:space-evenly;
           align-items:end; gap:.45rem; margin: .6rem auto 1.05rem; }
-        .player-card { width: min(118px, 18vw); min-width: 72px; text-align:center;
-          filter: drop-shadow(0 5px 6px rgba(0,0,0,.18)); }
-        .player-photo-wrap { height:78px; display:flex; align-items:flex-end; justify-content:center; }
-        .player-photo { height:78px; max-width:90px; object-fit:contain; object-position:center bottom; }
-        .player-fallback { width:58px; height:58px; border-radius:50%; display:grid; place-items:center;
-          color:white; font-size:1.5rem; font-weight:900; margin-bottom:6px; }
+        .player-card { position:relative; width: min(118px, 18vw); min-width:72px; text-align:center;
+          filter:drop-shadow(0 5px 6px rgba(0,0,0,.18)); z-index:3; }
+        .player-card[open], .player-card:hover, .player-card:focus-within { z-index:40; }
+        .player-card summary { display:block; list-style:none; cursor:pointer; border-radius:10px;
+          outline:none; -webkit-tap-highlight-color:transparent; }
+        .player-card summary::-webkit-details-marker { display:none; }
+        .player-card summary:focus-visible { box-shadow:0 0 0 3px #04f5ff; }
+        .player-photo-wrap { position:relative; height:78px; display:flex; align-items:flex-end;
+          justify-content:center; }
+        .player-photo { position:absolute; inset:auto 0 0; margin:auto; height:78px; max-width:90px;
+          object-fit:contain; object-position:center bottom; }
+        .player-silhouette { width:62px; height:70px; display:flex; align-items:flex-end;
+          justify-content:center; margin:0 auto; color:#d7dbe2; }
+        .player-silhouette svg { width:58px; height:66px; filter:drop-shadow(0 3px 4px rgba(0,0,0,.18)); }
         .player-label { position:relative; border-radius:9px; overflow:hidden; background:white; }
         .club-band { height:5px; }
         .player-name { color:#172033; font-size:.78rem; font-weight:850; padding:.34rem .18rem .08rem;
           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .player-meta { color:#637083; font-size:.61rem; font-weight:700; padding:0 .18rem .32rem; }
+        .player-info-dot { display:inline-grid; place-items:center; width:13px; height:13px;
+          margin-left:2px; border-radius:50%; background:#e9edf3; color:#37003c;
+          font-size:.52rem; font-weight:950; vertical-align:1px; }
+        .player-tooltip { position:absolute; left:50%; bottom:calc(100% + 9px); width:178px;
+          transform:translate(-50%,6px); padding:.7rem; border:1px solid rgba(55,0,60,.12);
+          border-radius:14px; background:#fff; color:#172033; text-align:left;
+          box-shadow:0 14px 34px rgba(26,21,34,.24); opacity:0; visibility:hidden;
+          pointer-events:none; transition:opacity .16s ease,transform .16s ease; z-index:100; }
+        .player-card:hover .player-tooltip, .player-card[open] .player-tooltip,
+        .player-card:focus-within .player-tooltip { opacity:1; visibility:visible;
+          transform:translate(-50%,0); }
+        .pitch-row > .player-card:first-child .player-tooltip { left:0; transform:translate(0,6px); }
+        .pitch-row > .player-card:first-child:hover .player-tooltip,
+        .pitch-row > .player-card:first-child[open] .player-tooltip { transform:translate(0,0); }
+        .pitch-row > .player-card:last-child .player-tooltip { left:auto; right:0; transform:translate(0,6px); }
+        .pitch-row > .player-card:last-child:hover .player-tooltip,
+        .pitch-row > .player-card:last-child[open] .player-tooltip { transform:translate(0,0); }
+        .tooltip-title { color:#37003c; font-size:.76rem; font-weight:900; margin-bottom:.45rem; }
+        .tooltip-grid { display:grid; grid-template-columns:1fr 1fr; gap:.35rem; }
+        .tooltip-stat { padding:.35rem; border-radius:8px; background:#f4f5f9; }
+        .tooltip-value { display:block; color:#172033; font-size:.73rem; font-weight:900; }
+        .tooltip-label { display:block; color:#667085; font-size:.52rem; font-weight:700;
+          line-height:1.2; margin-top:.05rem; }
+        .tooltip-hint { margin-top:.4rem; color:#737d8d; font-size:.52rem; text-align:center; }
         .captain-chip { position:absolute; top:-9px; left:-5px; width:22px; height:22px; border-radius:50%;
           display:grid; place-items:center; background:#37003c; color:white; border:2px solid #00ff87;
           font-size:.65rem; font-weight:900; z-index:2; }
@@ -196,6 +255,9 @@ def _inject_styles() -> None:
         .bench-title { color:#37003c; font-size:.75rem; font-weight:900; letter-spacing:.09em;
           text-transform:uppercase; text-align:center; margin-bottom:.25rem; }
         .bench-shell .pitch-row { margin:.35rem 0 .2rem; }
+        .sub-position-badge { margin:.1rem auto .35rem; width:max-content; padding:.18rem .48rem;
+          border-radius:999px; background:rgba(55,0,60,.88); color:#fff; font-size:.61rem;
+          font-weight:850; letter-spacing:.04em; text-transform:uppercase; }
         .blank-player { height:70px; width:58px; border:2px dashed rgba(255,255,255,.65);
           border-radius:50% 50% 12px 12px; display:grid; place-items:center; color:white;
           font-size:1.4rem; margin:0 auto 8px; }
@@ -214,12 +276,26 @@ def _inject_styles() -> None:
         .guide-title { color:#37003c; font-weight:850; margin:.3rem 0 .35rem; }
         .guide-copy { color:#586579; font-size:.9rem; line-height:1.48; }
         .source-note { color:#6b7280; font-size:.75rem; text-align:center; margin-top:.3rem; }
+        .creator-footer { margin-top:2.2rem; padding:1.1rem; border-top:1px solid rgba(55,0,60,.1);
+          color:#687386; text-align:center; font-size:.82rem; }
+        .creator-footer a { color:#37003c !important; font-weight:800; text-decoration:none; }
+        .creator-footer a:hover { text-decoration:underline; }
+        .sidebar-credit { margin-top:1.1rem; padding-top:.8rem; border-top:1px solid rgba(255,255,255,.17);
+          color:rgba(255,255,255,.72); font-size:.72rem; line-height:1.55; }
+        .sidebar-credit a { color:#fff !important; font-weight:800; text-decoration:none; }
+        .sidebar-credit a:hover { text-decoration:underline; }
+        .purpose-callout { margin:.25rem 0 1rem; padding:1rem 1.1rem; border-radius:16px;
+          background:linear-gradient(120deg,rgba(55,0,60,.07),rgba(4,245,255,.1));
+          border:1px solid rgba(55,0,60,.08); color:#334155; line-height:1.55; }
         @media(max-width:700px) {
           .block-container { padding:1.2rem .7rem; }
           .fpl-pitch { padding-left:.25rem; padding-right:.25rem; }
           .player-photo-wrap,.player-photo { height:58px; }
+          .player-silhouette { height:54px; width:48px; }
+          .player-silhouette svg { height:52px; width:46px; }
           .player-name { font-size:.64rem; }
           .player-meta { font-size:.53rem; }
+          .player-tooltip { width:154px; }
           .pitch-row { gap:.15rem; }
         }
         </style>
@@ -233,6 +309,9 @@ def _set_selection(selection: SquadSelection, audit: dict[str, Any] | None = Non
     st.session_state["recognition_audit"] = audit
     st.session_state.pop("rating_result", None)
     st.session_state.pop("optimization_result", None)
+    # Streamlit otherwise preserves an old widget choice and ignores the new
+    # formation's index when a screenshot or optimized squad replaces it.
+    st.session_state.pop("edit_formation", None)
 
 
 def _selection() -> SquadSelection | None:
@@ -263,43 +342,109 @@ def _club_colours(short_name: str) -> tuple[str, str]:
     return CLUB_COLOURS.get(short_name, ("#37003c", "#ffffff"))
 
 
-def _player_card(row: pd.Series | None, marker: str = "") -> str:
+def _stat_value(value: Any, *, decimals: int = 1, suffix: str = "") -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    try:
+        return f"{float(value):.{decimals}f}{suffix}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _friendly_timestamp(value: Any, *, include_time: bool = True) -> str:
+    if not value:
+        return "Unknown"
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        local = parsed.astimezone(ZoneInfo("America/New_York"))
+    except (TypeError, ValueError):
+        return str(value)
+    if not include_time:
+        return local.strftime("%B %d, %Y").replace(" 0", " ")
+    clock = local.strftime("%I:%M %p").lstrip("0")
+    return f"{local.strftime('%B %d, %Y').replace(' 0', ' ')} at {clock} {local.tzname()}"
+
+
+def _silhouette_html() -> str:
+    return (
+        '<div class="player-silhouette" aria-hidden="true">'
+        '<svg viewBox="0 0 80 92" xmlns="http://www.w3.org/2000/svg">'
+        '<circle cx="40" cy="23" r="16" fill="currentColor"/>'
+        '<path d="M12 88c1-24 10-39 28-39s27 15 28 39H12Z" fill="currentColor"/>'
+        '<path d="M24 54 40 65 56 54l7 11-10 23H27L17 65l7-11Z" fill="#b9c0ca"/>'
+        '</svg></div>'
+    )
+
+
+def _player_card(
+    row: pd.Series | None,
+    marker: str = "",
+    *,
+    prediction: pd.Series | None = None,
+    horizon: int = 3,
+    snapshot_gameweek: int | None = None,
+    position: str | None = None,
+) -> str:
     if row is None:
+        position_copy = POSITION_SINGULAR.get(position or "", "Player")
         return (
             '<div class="player-card"><div class="blank-player">+</div>'
             '<div class="player-label"><div class="club-band" style="background:#00ff87"></div>'
-            '<div class="player-name">Choose player</div><div class="player-meta">Empty slot</div>'
+            f'<div class="player-name">Choose player</div><div class="player-meta">{position_copy} slot</div>'
             "</div></div>"
         )
     club = str(row.get("club_short_name") or "")
-    accent, foreground = _club_colours(club)
+    accent, _ = _club_colours(club)
     name = escape(str(row["display_name"]))
+    player_position = str(row.get("position_short_name") or position or "")
     photo = row.get("photo_url")
     marker_html = (
         f'<span class="captain-chip">{escape(marker)}</span>' if marker else ""
     )
+    image_html = _silhouette_html()
     if pd.notna(photo) and photo:
-        image_html = (
+        image_html += (
             f'<img class="player-photo" src="{escape(str(photo), quote=True)}" '
-            f'alt="{name}" loading="lazy">'
+            'alt="" loading="lazy" onerror="this.style.display=\'none\'">'
         )
-    else:
-        initials = "".join(part[:1] for part in name.split()[:2]).upper() or "?"
-        image_html = (
-            f'<div class="player-fallback" style="background:{accent};color:{foreground}">'
-            f"{escape(initials)}</div>"
-        )
+    projected = None if prediction is None else prediction.get(f"predicted_points_{horizon}")
+    start_probability = None if prediction is None else prediction.get("start_probability_1")
+    if start_probability is not None and not pd.isna(start_probability):
+        start_probability = 100 * float(start_probability)
+    points_label = "Last season" if snapshot_gameweek == 1 else "Season points"
+    tooltip_stats = [
+        ("Points / game", _stat_value(row.get("points_per_game"))),
+        (points_label, _stat_value(row.get("total_points"), decimals=0)),
+        (f"Next {horizon} GW", _stat_value(projected)),
+        ("Chance to start", _stat_value(start_probability, decimals=0, suffix="%")),
+        ("Selected by", _stat_value(row.get("ownership_percent"), suffix="%")),
+        ("Price", f"£{float(row['price']):.1f}m"),
+    ]
+    stats_html = "".join(
+        '<div class="tooltip-stat">'
+        f'<span class="tooltip-value">{escape(value)}</span>'
+        f'<span class="tooltip-label">{escape(label)}</span></div>'
+        for label, value in tooltip_stats
+    )
+    tooltip_html = (
+        f'<div class="player-tooltip"><div class="tooltip-title">{name}</div>'
+        f'<div class="tooltip-grid">{stats_html}</div>'
+        '<div class="tooltip-hint">Model forecast · tap card again to close</div></div>'
+    )
     return (
-        f'<div class="player-card">{marker_html}<div class="player-photo-wrap">{image_html}</div>'
+        f'<details class="player-card">{marker_html}<summary aria-label="View statistics for {name}">'
+        f'<div class="player-photo-wrap">{image_html}</div>'
         f'<div class="player-label"><div class="club-band" style="background:{accent}"></div>'
-        f'<div class="player-name">{name}</div>'
-        f'<div class="player-meta">{escape(club)} · £{float(row["price"]):.1f}m</div>'
-        "</div></div>"
+        f'<div class="player-name">{name}<span class="player-info-dot">i</span></div>'
+        f'<div class="player-meta">{escape(club)} · {escape(player_position)} · £{float(row["price"]):.1f}m</div>'
+        f"</div></summary>{tooltip_html}</details>"
     )
 
 
-def _pitch_html(bundle: Any, selection: SquadSelection) -> str:
+def _pitch_html(bundle: Any, selection: SquadSelection, horizon: int) -> str:
     indexed = bundle.players.drop_duplicates("player_id").set_index("player_id")
+    predictions = bundle.predictions.drop_duplicates("player_id").set_index("player_id")
+    snapshot_gameweek = bundle.manifest.get("snapshot_gameweek")
     rows: list[str] = []
     for position in POSITION_ORDER:
         player_ids = [
@@ -312,11 +457,26 @@ def _pitch_html(bundle: Any, selection: SquadSelection) -> str:
             marker = (
                 "C" if player_id == selection.captain else "V" if player_id == selection.vice_captain else ""
             )
-            cards.append(_player_card(indexed.loc[player_id], marker))
+            cards.append(
+                _player_card(
+                    indexed.loc[player_id],
+                    marker,
+                    prediction=predictions.loc[player_id],
+                    horizon=horizon,
+                    snapshot_gameweek=snapshot_gameweek,
+                )
+            )
         rows.append(f'<div class="pitch-row">{"".join(cards)}</div>')
     bench_cards = []
     for player_id in selection.bench:
-        bench_cards.append(_player_card(indexed.loc[player_id]))
+        bench_cards.append(
+            _player_card(
+                indexed.loc[player_id],
+                prediction=predictions.loc[player_id],
+                horizon=horizon,
+                snapshot_gameweek=snapshot_gameweek,
+            )
+        )
     return (
         f'<div class="fpl-pitch">{"".join(rows)}</div>'
         '<div class="bench-shell"><div class="bench-title">Substitutes</div>'
@@ -373,6 +533,7 @@ def _render_slot(
     *,
     key: str,
     label: str,
+    horizon: int,
 ) -> int:
     labels = _friendly_labels(bundle.players)
     options = [0] + _position_options(bundle.players, position)
@@ -395,7 +556,19 @@ def _render_slot(
     row = None
     if int(chosen) > 0:
         row = bundle.players.set_index("player_id").loc[int(chosen)]
-    holder.markdown(_player_card(row), unsafe_allow_html=True)
+    prediction = None
+    if int(chosen) > 0:
+        prediction = bundle.predictions.set_index("player_id").loc[int(chosen)]
+    holder.markdown(
+        _player_card(
+            row,
+            prediction=prediction,
+            horizon=horizon,
+            snapshot_gameweek=bundle.manifest.get("snapshot_gameweek"),
+            position=position,
+        ),
+        unsafe_allow_html=True,
+    )
     return int(chosen)
 
 
@@ -408,6 +581,7 @@ def _render_interactive_pitch(
     submit_label: str,
     source: str,
     budget_limit: float | None,
+    horizon: int,
 ) -> None:
     starter_positions, bench_positions = slot_positions(formation, bundle.rules)
     starter_defaults, bench_defaults = selection_defaults(
@@ -435,6 +609,7 @@ def _render_interactive_pitch(
                             starter_defaults[absolute],
                             key=f"{key_prefix}_{formation}_starter_{absolute}",
                             label=f"Starter {absolute + 1} · {position}",
+                            horizon=horizon,
                         )
                     )
             offset += count
@@ -445,6 +620,10 @@ def _render_interactive_pitch(
         columns = st.columns(4)
         for index, position in enumerate(bench_positions):
             with columns[index]:
+                st.markdown(
+                    f'<div class="sub-position-badge">{POSITION_SINGULAR[position]}</div>',
+                    unsafe_allow_html=True,
+                )
                 selected_bench.append(
                     _render_slot(
                         bundle,
@@ -452,6 +631,7 @@ def _render_interactive_pitch(
                         bench_defaults[index],
                         key=f"{key_prefix}_{formation}_bench_{index}",
                         label=f"Substitute {index + 1} · {position}",
+                        horizon=horizon,
                     )
                 )
 
@@ -606,8 +786,9 @@ st.title("FPL Squad Lab")
 st.markdown(
     """
     <div class="hero-strip">
-      <div class="hero-kicker">Your squad, explained</div>
-      <div class="hero-copy">Upload your FPL screenshot or build the full squad yourself. See it on the pitch, get an intuitive 0–100 rating, and explore model-backed transfer ideas.</div>
+      <div class="hero-league-badge"><span>PL</span> Premier League fantasy analysis</div>
+      <div class="hero-kicker">Your FPL squad, explained</div>
+      <div class="hero-copy">Upload your Fantasy Premier League screenshot or build the full squad yourself. See it on the pitch, get an intuitive 0–100 rating, and explore model-backed transfer ideas.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -633,11 +814,25 @@ with st.sidebar:
         ),
     )
     st.divider()
-    st.subheader("Current update", help="The data snapshot used by every rating and recommendation.")
+    st.subheader("Latest model update", help="The data snapshot used by every rating and recommendation.")
     st.write(f"**Season:** {manifest.get('season') or 'Unknown'}")
-    st.write(f"**Data through:** Gameweek {manifest.get('snapshot_gameweek') or 'Unknown'}")
-    st.write(f"**Last forecast:** {manifest.get('prediction_created_at_utc') or 'Unknown'}")
-    st.caption("The same prediction version is used across ratings and transfer suggestions.")
+    st.write(
+        f"**Player data:** Gameweek {manifest.get('snapshot_gameweek') or 'Unknown'} snapshot · "
+        f"{_friendly_timestamp(manifest.get('snapshot_timestamp'), include_time=False)}"
+    )
+    st.write(
+        f"**Predictions refreshed:** "
+        f"{_friendly_timestamp(manifest.get('prediction_created_at_utc'))}"
+    )
+    st.caption("This tells you exactly how current the player data and forecasts are. Ratings and transfer suggestions use the same update.")
+    st.markdown(
+        """
+        <div class="sidebar-credit">Created by <strong>Max Homm</strong><br>
+        <a href="https://mchomm.github.io/" target="_blank" rel="noopener noreferrer">Portfolio</a> ·
+        <a href="https://www.linkedin.com/in/max-homm/" target="_blank" rel="noopener noreferrer">LinkedIn</a></div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 selection = _selection()
 if selection is None:
@@ -669,6 +864,7 @@ if selection is None:
             submit_label="Save manual squad",
             source="manual",
             budget_limit=bundle.rules.budget,
+            horizon=horizon,
         )
     st.markdown("#### Or let the model start for you")
     st.caption("Generate the highest-projected legal £100m squad, then edit any player.")
@@ -680,6 +876,17 @@ if selection is None:
             bundle.players, bundle.predictions
         )
         st.rerun()
+    with st.expander("New here? What this app does"):
+        st.markdown(
+            """
+            1. **Add your 15-player FPL squad** from a screenshot, manually, or with the optimizer.
+            2. **Choose one, three, or five Gameweeks** in the sidebar.
+            3. **Rate the squad** to compare its model projection with legal, human-like squads.
+            4. **Explore improvements** that respect Premier League fantasy prices, positions, club limits, and transfer costs.
+
+            The aim is to make Premier League and FPL data useful to a fan without hiding the uncertainty. Forecasts are estimates—not guarantees.
+            """
+        )
     st.stop()
 
 with st.expander("Replace this squad", expanded=False):
@@ -712,6 +919,7 @@ with st.expander("Replace this squad", expanded=False):
             submit_label="Replace with manual squad",
             source="manual",
             budget_limit=bundle.rules.budget,
+            horizon=horizon,
         )
 
 audit = st.session_state.get("recognition_audit")
@@ -729,9 +937,32 @@ if isinstance(audit, dict):
         )
         st.dataframe(_recognition_table(audit), hide_index=True, width="stretch")
 
-current_tab, rating_tab, improve_tab, model_tab = st.tabs(
-    ["⚽ My squad", "📊 Squad rating", "↗ Improve my team", "? How it works"]
+start_tab, current_tab, rating_tab, improve_tab, model_tab = st.tabs(
+    ["👋 Start here", "⚽ My squad", "📊 Squad rating", "↗ Improve my team", "? Model guide"],
+    default="⚽ My squad",
 )
+
+with start_tab:
+    st.subheader("A clearer way to understand your Premier League fantasy squad")
+    st.markdown(
+        """
+        <div class="purpose-callout">
+          FPL Squad Lab was built to turn a dense set of Premier League player forecasts into something a fan can use quickly: <strong>How good is my squad, why, and what could improve it?</strong> It combines official FPL player information with historical modelling while keeping every recognized player editable.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    guide_columns = st.columns(4)
+    with guide_columns[0]:
+        _guide_card("1️⃣", "Add all 15 players", "Upload a Pick Team screenshot, enter every player manually, or let the optimizer build a legal starting point.")
+    with guide_columns[1]:
+        _guide_card("2️⃣", "Choose your window", "Use the sidebar to focus on the next one, three, or five Premier League Gameweeks.")
+    with guide_columns[2]:
+        _guide_card("3️⃣", "Rate the squad", "See projected points plus readable 0–100 ratings for the whole squad and each positional area.")
+    with guide_columns[3]:
+        _guide_card("4️⃣", "Explore improvements", "Ask the optimizer for legal transfers, accounting for prices, club limits, formation, and transfer hits.")
+    st.info("Tip: hover over a player on desktop—or tap the card on mobile—to see form, ownership, starting likelihood, and the selected-window forecast.")
+    st.caption("Forecasts are estimates, not guarantees. Late team news and real football will always create uncertainty.")
 
 with current_tab:
     try:
@@ -755,7 +986,7 @@ with current_tab:
             help="Cash available for transfers. Screenshot imports cannot determine this automatically.",
             border=True,
         )
-        st.markdown(_pitch_html(bundle, selection), unsafe_allow_html=True)
+        st.markdown(_pitch_html(bundle, selection, horizon), unsafe_allow_html=True)
     except SquadValidationError as exc:
         st.error(str(exc))
 
@@ -783,6 +1014,7 @@ with current_tab:
             submit_label="Apply squad changes",
             source=selection.source,
             budget_limit=selection.budget_limit,
+            horizon=horizon,
         )
 
 with rating_tab:
@@ -936,7 +1168,7 @@ with improve_tab:
                 width="stretch",
             )
         optimized_selection = SquadSelection.from_mapping(optimization["selection"])
-        st.markdown(_pitch_html(bundle, optimized_selection), unsafe_allow_html=True)
+        st.markdown(_pitch_html(bundle, optimized_selection, horizon), unsafe_allow_html=True)
         with st.expander("Full optimized player list"):
             st.dataframe(pd.DataFrame(optimization["selected_players"]), hide_index=True, width="stretch")
         if st.button("Use this optimized squad", type="primary"):
@@ -1049,3 +1281,15 @@ with model_tab:
         st.caption(
             "Uploaded screenshots are processed temporarily and are not retained. The deployed model files are checksummed so the displayed version can be audited."
         )
+
+st.markdown(
+    """
+    <div class="creator-footer">
+      Built by <strong>Max Homm</strong> ·
+      <a href="https://mchomm.github.io/" target="_blank" rel="noopener noreferrer">Portfolio</a> ·
+      <a href="https://www.linkedin.com/in/max-homm/" target="_blank" rel="noopener noreferrer">LinkedIn</a><br>
+      Independent Premier League fantasy project; not affiliated with the Premier League.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)

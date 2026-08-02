@@ -24,6 +24,16 @@ def test_streamlit_app_loads_and_runs_rating_and_optimizer() -> None:
     ).click().run()
     assert not app.exception
     assert any(item.label == "Formation" for item in app.metric)
+    current_formation = next(
+        item.value for item in app.metric if item.label == "Formation"
+    )
+    assert next(
+        item.value for item in app.selectbox if item.label == "Formation"
+    ) == current_formation
+    rendered_html = "\n".join(item.value for item in app.markdown)
+    assert "player-tooltip" in rendered_html
+    assert "https://mchomm.github.io/" in rendered_html
+    assert "Premier League" in rendered_html
 
     next(item for item in app.button if item.label == "Rate this squad").click().run()
     assert not app.exception

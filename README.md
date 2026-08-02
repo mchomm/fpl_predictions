@@ -4,6 +4,13 @@ An end-to-end project for predicting Fantasy Premier League player and squad
 performance, then expressing position-specific and overall squad strength as
 percentile ratings.
 
+## Live app
+
+**[Open FPL Squad Lab →](https://fpl-predictions-2026.streamlit.app/)**
+
+Upload a Fantasy Premier League screenshot or build a squad manually, then rate
+it and explore model-backed transfer ideas in the deployed Streamlit app.
+
 The current implementation provides the reproducible data, modelling, and
 squad-rating foundation:
 
