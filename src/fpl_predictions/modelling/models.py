@@ -12,24 +12,43 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from fpl_predictions.modelling.baselines import (
     HistoricalMeanRegressor,
     RecentPointsRegressor,
+    RecentWithModelFallbackRegressor,
 )
 from fpl_predictions.modelling.features import FeatureSchema
+
+
+TEAM_STRENGTH_FEATURE_PREFIXES = (
+    "club_attack_strength",
+    "club_goals_conceded_strength",
+    "club_strength_matches",
+    "upcoming_opponent_",
+    "upcoming_attacking_fixture_",
+    "upcoming_defensive_fixture_",
+)
 
 
 def candidate_models(
     schema: FeatureSchema,
     horizon: int,
     random_seed: int = 42,
+    target_kind: str = "points",
 ) -> dict[str, object]:
     """Return deterministic baseline and supervised candidate estimators."""
     models: dict[str, object] = {
         "historical_mean": HistoricalMeanRegressor(),
     }
+    recent_prefixes = {
+        "points": "recent_points_mean_",
+        "minutes": "recent_minutes_mean_",
+        "appearances": "recent_appearance_rate_",
+        "starts": "recent_start_rate_",
+    }
+    recent_prefix = recent_prefixes[target_kind]
     recent_columns = [
-        column for column in schema.numeric if column.startswith("recent_points_mean_")
+        column for column in schema.numeric if column.startswith(recent_prefix)
     ]
     if recent_columns:
-        models["recent_points_mean"] = RecentPointsRegressor(
+        models[f"recent_{target_kind}_mean"] = RecentPointsRegressor(
             recent_columns[0], horizon
         )
 
@@ -56,7 +75,47 @@ def candidate_models(
             ),
         ]
     )
+    if target_kind in {"minutes", "appearances", "starts"} and recent_columns:
+        models[f"recent_{target_kind}_with_model_fallback"] = (
+            RecentWithModelFallbackRegressor(
+                recent_columns[0],
+                horizon,
+                models["random_forest"],
+            )
+        )
+    base_schema = _without_team_strength(schema)
+    if base_schema != schema:
+        models["random_forest_without_team_strength"] = Pipeline(
+            [
+                (
+                    "preprocess",
+                    _preprocessor(base_schema, scale_numeric=False),
+                ),
+                (
+                    "model",
+                    RandomForestRegressor(
+                        n_estimators=100,
+                        max_depth=10,
+                        min_samples_leaf=4,
+                        random_state=random_seed,
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
+        )
     return models
+
+
+def _without_team_strength(schema: FeatureSchema) -> FeatureSchema:
+    """Return the pre-upgrade feature set for an honest validation ablation."""
+    return FeatureSchema(
+        numeric=tuple(
+            column
+            for column in schema.numeric
+            if not column.startswith(TEAM_STRENGTH_FEATURE_PREFIXES)
+        ),
+        categorical=schema.categorical,
+    )
 
 
 def _preprocessor(

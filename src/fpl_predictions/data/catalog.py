@@ -105,6 +105,103 @@ def build_catalog(
                 WHERE false
                 """
             )
+
+        manager_root = data_dir / "processed" / "manager_samples"
+        rate_files = sorted(
+            manager_root.glob("*/*/*/sample_player_rates.parquet")
+        )
+        _create_parquet_view(connection, "_manager_sample_rate_runs", rate_files)
+        if rate_files:
+            connection.execute(
+                """
+                CREATE OR REPLACE VIEW manager_sample_player_rates AS
+                SELECT * EXCLUDE (_row_number)
+                FROM (
+                    SELECT *,
+                        row_number() OVER (
+                            PARTITION BY season, gameweek, player_id
+                            ORDER BY collected_at DESC, filename DESC
+                        ) AS _row_number
+                    FROM _manager_sample_rate_runs
+                )
+                WHERE _row_number = 1
+                """
+            )
+        else:
+            connection.execute(
+                """
+                CREATE OR REPLACE VIEW manager_sample_player_rates AS
+                SELECT
+                    CAST(NULL AS VARCHAR) AS season,
+                    CAST(NULL AS INTEGER) AS gameweek,
+                    CAST(NULL AS BIGINT) AS player_id,
+                    CAST(NULL AS DOUBLE) AS sample_ownership_percent
+                WHERE false
+                """
+            )
+
+        manager_files = sorted(manager_root.glob("*/*/*/managers.parquet"))
+        _create_parquet_view(connection, "_manager_sample_runs", manager_files)
+        if manager_files:
+            connection.execute(
+                """
+                CREATE OR REPLACE VIEW manager_gameweek_samples AS
+                SELECT * EXCLUDE (_row_number)
+                FROM (
+                    SELECT *,
+                        row_number() OVER (
+                            PARTITION BY season, gameweek, manager_id
+                            ORDER BY collected_at DESC, filename DESC
+                        ) AS _row_number
+                    FROM _manager_sample_runs
+                )
+                WHERE _row_number = 1
+                """
+            )
+        else:
+            connection.execute(
+                """
+                CREATE OR REPLACE VIEW manager_gameweek_samples AS
+                SELECT
+                    CAST(NULL AS BIGINT) AS manager_id,
+                    CAST(NULL AS VARCHAR) AS season,
+                    CAST(NULL AS INTEGER) AS gameweek,
+                    CAST(NULL AS VARCHAR) AS collected_at
+                WHERE false
+                """
+            )
+
+        pick_files = sorted(manager_root.glob("*/*/*/manager_picks.parquet"))
+        _create_parquet_view(connection, "_manager_pick_runs", pick_files)
+        if pick_files:
+            connection.execute(
+                """
+                CREATE OR REPLACE VIEW manager_gameweek_picks AS
+                SELECT * EXCLUDE (_row_number)
+                FROM (
+                    SELECT *,
+                        row_number() OVER (
+                            PARTITION BY season, gameweek, manager_id, player_id
+                            ORDER BY collected_at DESC, filename DESC
+                        ) AS _row_number
+                    FROM _manager_pick_runs
+                )
+                WHERE _row_number = 1
+                """
+            )
+        else:
+            connection.execute(
+                """
+                CREATE OR REPLACE VIEW manager_gameweek_picks AS
+                SELECT
+                    CAST(NULL AS BIGINT) AS manager_id,
+                    CAST(NULL AS VARCHAR) AS season,
+                    CAST(NULL AS INTEGER) AS gameweek,
+                    CAST(NULL AS BIGINT) AS player_id,
+                    CAST(NULL AS INTEGER) AS squad_position
+                WHERE false
+                """
+            )
     finally:
         connection.close()
     return database

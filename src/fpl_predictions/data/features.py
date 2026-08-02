@@ -6,6 +6,8 @@ from collections.abc import Sequence
 
 import pandas as pd
 
+from fpl_predictions.data.team_strength import add_team_strength_features
+
 
 class FeatureValidationError(ValueError):
     """Raised when source data cannot support leakage-safe training rows."""
@@ -39,6 +41,12 @@ def build_training_table(
     stats = player_gameweek_stats.copy()
     for column in ("gameweek", "player_id", "total_points", "minutes"):
         stats[column] = pd.to_numeric(stats[column], errors="raise")
+    stats["_appeared"] = stats["minutes"].gt(0).astype(float)
+    if "starts" in stats:
+        starts = pd.to_numeric(stats["starts"], errors="coerce")
+        stats["_started"] = starts.gt(0).astype(float)
+    else:
+        stats["_started"] = stats["minutes"].ge(60).astype(float)
     labeled_groups: list[pd.DataFrame] = []
     group_columns = ["season", "snapshot_gameweek"]
     for (season, gameweek), feature_group in features.groupby(
@@ -51,24 +59,55 @@ def build_training_table(
         )
         for horizon in normalized_horizons:
             label = f"label_next_{horizon}_gameweek"
+            minutes_label = f"label_minutes_next_{horizon}_gameweek"
+            appearance_label = f"label_appearances_next_{horizon}_gameweek"
+            start_label = f"label_starts_next_{horizon}_gameweek"
             if horizon != 1:
                 label += "s"
+                minutes_label += "s"
+                appearance_label += "s"
+                start_label += "s"
             target_gameweeks = set(range(int(gameweek), int(gameweek) + horizon))
             if not target_gameweeks.issubset(available_gameweeks):
                 group[label] = pd.NA
+                group[minutes_label] = pd.NA
+                group[appearance_label] = pd.NA
+                group[start_label] = pd.NA
                 continue
             future = season_stats.loc[
                 season_stats["gameweek"].isin(target_gameweeks)
             ]
             labels = future.groupby("player_id", as_index=False).agg(
-                **{label: ("total_points", "sum")},
+                **{
+                    label: ("total_points", "sum"),
+                    minutes_label: ("minutes", "sum"),
+                    appearance_label: ("_appeared", "sum"),
+                    start_label: ("_started", "sum"),
+                },
                 _label_gameweeks=("gameweek", "nunique"),
             )
             labels.loc[
                 labels["_label_gameweeks"] != horizon, label
             ] = pd.NA
+            labels.loc[
+                labels["_label_gameweeks"] != horizon, minutes_label
+            ] = pd.NA
+            labels.loc[
+                labels["_label_gameweeks"] != horizon, appearance_label
+            ] = pd.NA
+            labels.loc[
+                labels["_label_gameweeks"] != horizon, start_label
+            ] = pd.NA
             group = group.merge(
-                labels[["player_id", label]],
+                labels[
+                    [
+                        "player_id",
+                        label,
+                        minutes_label,
+                        appearance_label,
+                        start_label,
+                    ]
+                ],
                 on="player_id",
                 how="left",
                 validate="one_to_one",
@@ -168,6 +207,12 @@ def build_prediction_table(
         snapshots[column] = pd.to_numeric(snapshots[column], errors="raise")
     for column in ("gameweek", "player_id", "total_points", "minutes"):
         stats[column] = pd.to_numeric(stats[column], errors="raise")
+    stats["_appeared"] = stats["minutes"].gt(0).astype(float)
+    if "starts" in stats:
+        starts = pd.to_numeric(stats["starts"], errors="coerce")
+        stats["_started"] = starts.gt(0).astype(float)
+    else:
+        stats["_started"] = stats["minutes"].ge(60).astype(float)
 
     derived_groups: list[pd.DataFrame] = []
     for (season, gameweek), snapshot_group in snapshots.groupby(
@@ -194,6 +239,11 @@ def build_prediction_table(
                     "mean",
                 ),
                 f"recent_minutes_mean_{recent_window}": ("minutes", "mean"),
+                f"recent_appearance_rate_{recent_window}": (
+                    "_appeared",
+                    "mean",
+                ),
+                f"recent_start_rate_{recent_window}": ("_started", "mean"),
                 "recent_gameweeks_available": ("gameweek", "nunique"),
             }
         )
@@ -239,7 +289,12 @@ def _add_fixture_features(
             result["club_id"].map(away_counts).fillna(0).astype("int64")
         )
         result[total_column] = result[home_column] + result[away_column]
-    return result
+    return add_team_strength_features(
+        result,
+        snapshot_fixtures,
+        snapshot_gameweek,
+        horizons,
+    )
 
 
 def _validate_horizons(horizons: Sequence[int]) -> tuple[int, ...]:

@@ -29,6 +29,19 @@ class ModelArtifact:
         return np.asarray(self.model.predict(features), dtype=float)
 
 
+@dataclass(slots=True)
+class ProbabilityCalibratedRegressor:
+    """Apply a fitted sigmoid calibration model to regression scores."""
+
+    estimator: Any
+    calibrator: Any
+
+    def predict(self, frame: pd.DataFrame) -> np.ndarray:
+        raw = np.asarray(self.estimator.predict(frame), dtype=float)
+        probability = self.calibrator.predict_proba(raw.reshape(-1, 1))[:, 1]
+        return np.clip(probability, 0.0, 1.0)
+
+
 def save_artifact(artifact: ModelArtifact, directory: Path) -> Path:
     """Atomically save a model payload and readable metadata."""
     directory.mkdir(parents=True, exist_ok=False)
@@ -76,4 +89,3 @@ def load_artifact(path: Path) -> ModelArtifact:
         schema=FeatureSchema.from_dict(payload["schema"]),
         metadata=dict(payload["metadata"]),
     )
-

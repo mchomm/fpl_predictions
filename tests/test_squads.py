@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import pytest
 
 from fpl_predictions.squads.generation import generate_reference_population
-from fpl_predictions.squads.projection import project_squad
-from fpl_predictions.squads.ratings import midrank_percentile, rate_squad
+from fpl_predictions.squads.projection import (
+    player_projection_details,
+    project_squad,
+)
+from fpl_predictions.squads.ratings import (
+    midrank_percentile,
+    rate_squad,
+    school_style_score,
+)
 from fpl_predictions.squads.rules import SquadRules
 from fpl_predictions.squads.schemas import SquadSelection
 from fpl_predictions.squads.validation import (
@@ -105,6 +114,8 @@ def predictions() -> pd.DataFrame:
             "player_id": ids,
             "predicted_points_1": ids.astype(float),
             "predicted_points_3": ids.astype(float) * 2,
+            "predicted_minutes_1": ids.astype(float) * 4,
+            "predicted_minutes_3": ids.astype(float) * 12,
         }
     )
 
@@ -144,6 +155,23 @@ def test_validation_reports_duplicate_and_bad_captain(
     assert "captain must be in the starting XI" in str(error.value)
 
 
+def test_validation_rejects_unsupported_active_chip(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    selection: SquadSelection,
+) -> None:
+    chipped = SquadSelection(
+        player_ids=selection.player_ids,
+        starting_xi=selection.starting_xi,
+        bench=selection.bench,
+        captain=selection.captain,
+        vice_captain=selection.vice_captain,
+        active_chip="bboost",
+    )
+    with pytest.raises(SquadValidationError, match="active_chip"):
+        validate_squad(chipped, players, rules)
+
+
 def test_projection_aggregates_positions_bench_and_captain(
     rules: SquadRules,
     players: pd.DataFrame,
@@ -160,6 +188,23 @@ def test_projection_aggregates_positions_bench_and_captain(
     assert projection.captain_points == 22.5
     assert projection.overall_points == 201.0
     assert "availability-adjusted" in projection.warnings[0]
+
+
+def test_player_details_report_expected_minutes_without_rescaling_points(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    selection: SquadSelection,
+    predictions: pd.DataFrame,
+) -> None:
+    validated = validate_squad(selection, players, rules)
+    details = player_projection_details(validated, predictions, horizon=3)
+    captain = next(item for item in details if item["is_captain"])
+
+    assert len(details) == 15
+    assert captain["player_id"] == 15
+    assert captain["predicted_points"] == 30
+    assert captain["expected_minutes"] == 180
+    assert captain["availability_adjusted_expected_minutes"] == 150
 
 
 def test_midrank_percentile_and_direct_overall_rating() -> None:
@@ -191,9 +236,19 @@ def test_midrank_percentile_and_direct_overall_rating() -> None:
     )
     assert midrank_percentile(2, references["defence_points"]) == 50.0
     rating = rate_squad(projection, references, "test population")
-    assert rating.scores["defence"] == 50.0
-    assert rating.scores["overall"] == 50.0
+    assert rating.percentiles["defence"] == 50.0
+    assert rating.percentiles["overall"] == 50.0
+    assert rating.scores["defence"] == 75.0
+    assert rating.scores["overall"] == 75.0
     assert "not an average" in rating.interpretation
+
+
+def test_school_style_score_has_natural_anchors_and_no_perfect_score() -> None:
+    population = pd.Series(range(10_000), dtype=float)
+    assert school_style_score(5_000, population) == pytest.approx(75.0, abs=0.01)
+    assert school_style_score(9_700, population) == pytest.approx(90.05, abs=0.1)
+    assert school_style_score(9_940, population) == pytest.approx(95.0, abs=0.1)
+    assert school_style_score(20_000, population) == 99.9
 
 
 def test_reference_generation_is_deterministic_and_legal(
@@ -223,3 +278,52 @@ def test_reference_generation_is_deterministic_and_legal(
     assert len(first) == 4
     assert first["total_cost"].le(rules.budget).all()
     assert first["formation"].eq("3-4-3").all()
+    row = first.iloc[0]
+    generated = SquadSelection(
+        player_ids=tuple(json.loads(row.player_ids)),
+        starting_xi=tuple(json.loads(row.starting_xi)),
+        bench=tuple(json.loads(row.bench)),
+        captain=int(row.captain),
+        vice_captain=int(row.vice_captain),
+        source="generated",
+    )
+    validate_squad(generated, players, rules)
+
+
+def test_human_like_references_are_ownership_and_budget_conditioned(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    predictions: pd.DataFrame,
+) -> None:
+    references = generate_reference_population(
+        players,
+        predictions,
+        rules,
+        horizon=3,
+        size=3,
+        strategy="human_like",
+        seed=11,
+        target_cost=85.0,
+        budget_band=0.0,
+    )
+    assert references["total_cost"].eq(85.0).all()
+    assert references["target_cost"].eq(85.0).all()
+    assert references["minimum_reference_cost"].eq(85.0).all()
+
+
+def test_human_like_references_require_ownership(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    predictions: pd.DataFrame,
+) -> None:
+    with pytest.raises(ValueError, match="ownership_percent"):
+        generate_reference_population(
+            players.drop(columns="ownership_percent"),
+            predictions,
+            rules,
+            horizon=3,
+            size=1,
+            strategy="human_like",
+            target_cost=85.0,
+            budget_band=0.0,
+        )

@@ -35,6 +35,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Predict current player points from saved horizon artifacts.",
     )
     parser.add_argument("--models-run", type=Path, required=True)
+    parser.add_argument(
+        "--minutes-models-run",
+        type=Path,
+        help="Optional expected-minutes model run for matching horizons.",
+    )
+    parser.add_argument(
+        "--appearance-models-run",
+        type=Path,
+        help="Optional calibrated next-gameweek appearance model run.",
+    )
+    parser.add_argument(
+        "--start-models-run",
+        type=Path,
+        help="Optional calibrated next-gameweek start model run.",
+    )
     parser.add_argument("--data-dir", type=Path, default=settings.data_dir)
     parser.add_argument("--database", type=Path)
     parser.add_argument("--season")
@@ -50,9 +65,57 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"No horizon artifacts found under {args.models_run}"
             )
         artifacts = [load_artifact(path) for path in artifact_paths]
-        horizons = sorted(
-            int(artifact.metadata["horizon_gameweeks"])
+        if any(
+            artifact.metadata.get("target_kind", "points") != "points"
             for artifact in artifacts
+        ):
+            raise ValueError("--models-run must contain points artifacts")
+        minutes_artifacts = []
+        if args.minutes_models_run is not None:
+            minute_paths = sorted(
+                args.minutes_models_run.glob("horizon-*/artifact")
+            )
+            if not minute_paths:
+                raise FileNotFoundError(
+                    "No horizon artifacts found under "
+                    f"{args.minutes_models_run}"
+                )
+            minutes_artifacts = [load_artifact(path) for path in minute_paths]
+            if any(
+                artifact.metadata.get("target_kind") != "minutes"
+                for artifact in minutes_artifacts
+            ):
+                raise ValueError(
+                    "--minutes-models-run must contain minutes artifacts"
+                )
+        probability_artifacts: dict[str, object] = {}
+        for target_kind, run_path in (
+            ("appearances", args.appearance_models_run),
+            ("starts", args.start_models_run),
+        ):
+            if run_path is None:
+                continue
+            paths = sorted(run_path.glob("horizon-*/artifact"))
+            if len(paths) != 1:
+                raise ValueError(
+                    f"--{target_kind}-models-run must contain exactly one artifact"
+                )
+            artifact = load_artifact(paths[0])
+            if (
+                artifact.metadata.get("target_kind") != target_kind
+                or int(artifact.metadata.get("horizon_gameweeks", 0)) != 1
+            ):
+                raise ValueError(
+                    f"--{target_kind}-models-run must contain a horizon-1 "
+                    f"{target_kind} artifact"
+                )
+            probability_artifacts[target_kind] = artifact
+        horizons = sorted(
+            {
+            int(artifact.metadata["horizon_gameweeks"])
+            for artifact in artifacts + minutes_artifacts
+            }
+            | {1 for _ in probability_artifacts}
         )
         database = build_catalog(args.data_dir, args.database)
         players, fixtures, stats, snapshot = _load_snapshot_data(
@@ -92,6 +155,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             predictions[f"predicted_points_{horizon}"] = predicted[
                 "predicted_future_points"
             ].to_numpy()
+        for artifact in minutes_artifacts:
+            horizon = int(artifact.metadata["horizon_gameweeks"])
+            predicted = predict_players(artifact, features)
+            predictions[f"predicted_minutes_{horizon}"] = predicted[
+                "predicted_future_points"
+            ].clip(lower=0, upper=90 * horizon).to_numpy()
+        for target_kind, artifact in probability_artifacts.items():
+            predicted = predict_players(artifact, features)
+            output_name = (
+                "appearance_probability_1"
+                if target_kind == "appearances"
+                else "start_probability_1"
+            )
+            predictions[output_name] = predicted[
+                "predicted_future_points"
+            ].clip(lower=0, upper=1).to_numpy()
 
         output = args.output or (
             args.data_dir.parent
@@ -107,6 +186,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "created_at_utc": datetime.now(timezone.utc).isoformat(),
                 "snapshot": snapshot,
                 "models_run": str(args.models_run.resolve()),
+                "minutes_models_run": (
+                    str(args.minutes_models_run.resolve())
+                    if args.minutes_models_run is not None
+                    else None
+                ),
+                "appearance_models_run": (
+                    str(args.appearance_models_run.resolve())
+                    if args.appearance_models_run is not None
+                    else None
+                ),
+                "start_models_run": (
+                    str(args.start_models_run.resolve())
+                    if args.start_models_run is not None
+                    else None
+                ),
                 "horizons": horizons,
                 "rows": len(predictions),
                 "limitations": [

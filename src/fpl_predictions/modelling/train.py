@@ -10,9 +10,15 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import brier_score_loss
 
 from fpl_predictions.data.storage import write_json, write_parquet
-from fpl_predictions.modelling.artifacts import ModelArtifact, save_artifact
+from fpl_predictions.modelling.artifacts import (
+    ModelArtifact,
+    ProbabilityCalibratedRegressor,
+    save_artifact,
+)
 from fpl_predictions.modelling.evaluation import (
     calibration_by_prediction_bins,
     prediction_metrics,
@@ -41,12 +47,17 @@ class TrainingResult:
     calibration_path: Path
 
 
-def label_column(horizon: int) -> str:
+def label_column(horizon: int, target_kind: str = "points") -> str:
     """Return the training label name for a future-gameweek horizon."""
     if horizon <= 0:
         raise ValueError("horizon must be positive")
+    if target_kind not in {"points", "minutes", "appearances", "starts"}:
+        raise ValueError(
+            "target_kind must be points, minutes, appearances, or starts"
+        )
     suffix = "gameweek" if horizon == 1 else "gameweeks"
-    return f"label_next_{horizon}_{suffix}"
+    prefix = "" if target_kind == "points" else f"{target_kind}_"
+    return f"label_{prefix}next_{horizon}_{suffix}"
 
 
 def train_horizon(
@@ -59,9 +70,14 @@ def train_horizon(
     source_paths: Sequence[Path] | None = None,
     max_validation_folds: int | None = 12,
     minimum_feature_coverage: float = 0.5,
+    target_kind: str = "points",
 ) -> TrainingResult:
     """Compare candidates temporally and save the best fitted model."""
-    label = label_column(horizon)
+    if target_kind in {"appearances", "starts"} and horizon != 1:
+        raise ValueError(
+            f"{target_kind} probability artifacts currently require horizon 1"
+        )
+    label = label_column(horizon, target_kind)
     if label not in training_table:
         raise ValueError(f"Training table has no label column {label!r}")
     data = training_table.dropna(subset=[label]).copy()
@@ -77,7 +93,7 @@ def train_horizon(
     target = data[label].astype(float)
     eligible_folds = rolling_origin_folds(data, horizon, min_train_periods)
     folds = _select_folds(eligible_folds, max_validation_folds)
-    models = candidate_models(schema, horizon, random_seed)
+    models = candidate_models(schema, horizon, random_seed, target_kind)
 
     prediction_frames: list[pd.DataFrame] = []
     for model_name, estimator in models.items():
@@ -126,6 +142,40 @@ def train_horizon(
     selected_name = str(leaderboard.iloc[0]["model"])
     selected_model = clone(models[selected_name])
     selected_model.fit(features, target)
+    probability_calibration = None
+    if target_kind in {"appearances", "starts"}:
+        selected_rows = predictions.loc[
+            predictions["model"] == selected_name
+        ].copy()
+        calibrator, probability_calibration = _fit_probability_calibrator(
+            selected_rows
+        )
+        selected_rows["calibrated_prediction"] = calibrator.predict_proba(
+            selected_rows[["prediction"]].to_numpy(dtype=float)
+        )[:, 1]
+        predictions = predictions.merge(
+            selected_rows[
+                [
+                    "fold",
+                    "model",
+                    "player_id",
+                    "snapshot_timestamp",
+                    "calibrated_prediction",
+                ]
+            ],
+            on=[
+                "fold",
+                "model",
+                "player_id",
+                "snapshot_timestamp",
+            ],
+            how="left",
+            validate="one_to_one",
+        )
+        selected_model = ProbabilityCalibratedRegressor(
+            selected_model,
+            calibrator,
+        )
 
     output_dir.mkdir(parents=True, exist_ok=False)
     predictions_path = output_dir / "fold_predictions.parquet"
@@ -148,6 +198,8 @@ def train_horizon(
         random_seed=random_seed,
         source_paths=source_paths,
         minimum_feature_coverage=minimum_feature_coverage,
+        target_kind=target_kind,
+        probability_calibration=probability_calibration,
     )
     write_json(output_dir / "evaluation.json", metadata["evaluation"])
     artifact = ModelArtifact(selected_model, schema, metadata)
@@ -175,6 +227,8 @@ def _metadata(
     random_seed: int,
     source_paths: Sequence[Path] | None,
     minimum_feature_coverage: float,
+    target_kind: str,
+    probability_calibration: dict[str, Any] | None,
 ) -> dict[str, Any]:
     evaluation = {
         "folds": folds,
@@ -198,6 +252,7 @@ def _metadata(
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "horizon_gameweeks": horizon,
         "target": label,
+        "target_kind": target_kind,
         "selected_model": selected_model,
         "feature_schema": schema.as_dict(),
         "training_rows": len(data),
@@ -217,6 +272,49 @@ def _metadata(
         "random_seed": random_seed,
         "minimum_feature_coverage": minimum_feature_coverage,
         "evaluation": evaluation,
+        "probability_calibration": probability_calibration,
+    }
+
+
+def _fit_probability_calibrator(
+    predictions: pd.DataFrame,
+) -> tuple[LogisticRegression, dict[str, Any]]:
+    """Fit sigmoid calibration on OOF scores and audit a later holdout slice."""
+    ordered = predictions.sort_values("snapshot_timestamp").reset_index(drop=True)
+    unique_times = ordered["snapshot_timestamp"].drop_duplicates().tolist()
+    if len(unique_times) < 3:
+        raise ValueError("Probability calibration requires at least three origins")
+    split_index = max(1, int(len(unique_times) * 2 / 3))
+    calibration_times = set(unique_times[:split_index])
+    calibration_rows = ordered[ordered["snapshot_timestamp"].isin(calibration_times)]
+    audit_rows = ordered[~ordered["snapshot_timestamp"].isin(calibration_times)]
+    if calibration_rows["actual"].nunique() < 2:
+        raise ValueError("Probability calibration requires both outcome classes")
+    audit_calibrator = LogisticRegression(C=1.0, max_iter=1000)
+    audit_calibrator.fit(
+        calibration_rows[["prediction"]].to_numpy(dtype=float),
+        calibration_rows["actual"].to_numpy(dtype=int),
+    )
+    audit_raw = np.clip(audit_rows["prediction"].to_numpy(dtype=float), 0, 1)
+    audit_calibrated = audit_calibrator.predict_proba(
+        audit_rows[["prediction"]].to_numpy(dtype=float)
+    )[:, 1]
+    calibrator = LogisticRegression(C=1.0, max_iter=1000)
+    calibrator.fit(
+        ordered[["prediction"]].to_numpy(dtype=float),
+        ordered["actual"].to_numpy(dtype=int),
+    )
+    return calibrator, {
+        "method": "sigmoid_logistic",
+        "source": "out_of-fold temporal predictions",
+        "audit_rows": len(audit_rows),
+        "audit_origins": len(unique_times) - split_index,
+        "audit_brier_raw": float(
+            brier_score_loss(audit_rows["actual"], audit_raw)
+        ),
+        "audit_brier_calibrated": float(
+            brier_score_loss(audit_rows["actual"], audit_calibrated)
+        ),
     }
 
 

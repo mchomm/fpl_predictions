@@ -15,6 +15,9 @@ from fpl_predictions.api.schemas import (
     ResponseShapeError,
     validate_bootstrap,
     validate_fixtures,
+    validate_league_standings,
+    validate_manager,
+    validate_manager_picks,
     validate_mapping,
 )
 from fpl_predictions.config import DEFAULT_BASE_URL
@@ -118,7 +121,27 @@ class FPLClient:
             "entry/"
             f"{_positive_id(manager_id, 'manager_id')}/event/"
             f"{_positive_id(gameweek, 'gameweek')}/picks/",
-            lambda value: validate_mapping(value, "manager picks"),
+            validate_manager_picks,
+        )
+
+    def get_manager(self, manager_id: int) -> dict[str, Any]:
+        """Return public manager metadata."""
+        return self._get(
+            f"entry/{_positive_id(manager_id, 'manager_id')}/",
+            validate_manager,
+        )
+
+    def get_classic_league_standings(
+        self,
+        league_id: int,
+        page: int = 1,
+    ) -> dict[str, Any]:
+        """Return one public classic-league standings page."""
+        return self._get(
+            "leagues-classic/"
+            f"{_positive_id(league_id, 'league_id')}/standings/"
+            f"?page_standings={_positive_id(page, 'page')}",
+            validate_league_standings,
         )
 
     def get_manager_history(self, manager_id: int) -> dict[str, Any]:
@@ -140,4 +163,3 @@ def _positive_id(value: int, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
     return value
-

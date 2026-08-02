@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     settings = Settings.from_env()
     parser = argparse.ArgumentParser(
         prog="fpl-train-models",
-        description="Compare and train future FPL player-points models.",
+        description="Compare and train future FPL points or minutes models.",
     )
     parser.add_argument(
         "--training-data",
@@ -39,6 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--max-validation-folds", type=int, default=12)
     parser.add_argument("--minimum-feature-coverage", type=float, default=0.5)
+    parser.add_argument(
+        "--target",
+        choices=("points", "minutes", "appearances", "starts"),
+        default="points",
+        help="Train future FPL-points models or expected-minutes models.",
+    )
     parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -48,6 +54,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Train and save one selected model per requested horizon."""
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.target in {"appearances", "starts"} and args.horizons != [1]:
+        parser.error(
+            "appearance/start probability models currently require --horizons 1"
+        )
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
@@ -72,6 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 source_paths=training_paths,
                 max_validation_folds=args.max_validation_folds,
                 minimum_feature_coverage=args.minimum_feature_coverage,
+                target_kind=args.target,
             )
             best = result.leaderboard.iloc[0]
             summaries.append(
@@ -91,6 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     str(path.resolve()) for path in training_paths
                 ],
                 "horizons": summaries,
+                "target": args.target,
             },
         )
     except (

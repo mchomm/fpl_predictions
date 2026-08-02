@@ -54,3 +54,46 @@ def validate_mapping(payload: Any, endpoint: str) -> dict[str, Any]:
         raise ResponseShapeError(f"{endpoint} response must be a JSON object")
     return dict(payload)
 
+
+def validate_manager(payload: Any) -> dict[str, Any]:
+    """Validate public manager metadata needed for league discovery."""
+    result = validate_mapping(payload, "manager")
+    if not isinstance(result.get("id"), int):
+        raise ResponseShapeError("manager response must contain an integer id")
+    leagues = result.get("leagues")
+    if not isinstance(leagues, Mapping) or not isinstance(
+        leagues.get("classic"), list
+    ):
+        raise ResponseShapeError(
+            "manager response must contain a leagues.classic list"
+        )
+    return result
+
+
+def validate_league_standings(payload: Any) -> dict[str, Any]:
+    """Validate a classic-league standings page."""
+    result = validate_mapping(payload, "classic league standings")
+    standings = result.get("standings")
+    if not isinstance(standings, Mapping) or not isinstance(
+        standings.get("results"), list
+    ):
+        raise ResponseShapeError(
+            "classic league standings must contain standings.results"
+        )
+    if any(not isinstance(row, Mapping) for row in standings["results"]):
+        raise ResponseShapeError("standings.results must contain only objects")
+    return result
+
+
+def validate_manager_picks(payload: Any) -> dict[str, Any]:
+    """Validate public post-deadline manager picks."""
+    result = validate_mapping(payload, "manager picks")
+    picks = result.get("picks")
+    history = result.get("entry_history")
+    if not isinstance(picks, list) or any(
+        not isinstance(row, Mapping) for row in picks
+    ):
+        raise ResponseShapeError("manager picks must contain a picks object list")
+    if not isinstance(history, Mapping):
+        raise ResponseShapeError("manager picks must contain entry_history")
+    return result

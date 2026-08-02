@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import NormalDist
 from typing import Any
 
 import numpy as np
@@ -20,12 +21,17 @@ RATING_COMPONENTS = {
     "overall": "overall_points",
 }
 
+SCHOOL_SCORE_CENTER = 75.0
+SCHOOL_SCORE_SPREAD = 8.0
+SCHOOL_SCORE_MAXIMUM = 99.9
+
 
 @dataclass(frozen=True, slots=True)
 class SquadRating:
     """A complete 0-100 rating against a named reference population."""
 
     scores: dict[str, float]
+    percentiles: dict[str, float]
     reference_name: str
     reference_size: int
     interpretation: str
@@ -36,6 +42,20 @@ class SquadRating:
     def as_dict(self) -> dict[str, Any]:
         return {
             "scores": self.scores,
+            "percentiles": self.percentiles,
+            "score_calibration": {
+                "name": "school_style_v1",
+                "formula": (
+                    "75 + 8 * inverse_normal_cdf(smoothed_midrank_probability)"
+                ),
+                "median_reference_score": SCHOOL_SCORE_CENTER,
+                "score_points_per_standard_deviation": SCHOOL_SCORE_SPREAD,
+                "maximum_score": SCHOOL_SCORE_MAXIMUM,
+                "notes": (
+                    "Monotonic presentation transform only; projections and "
+                    "comparative ordering are unchanged."
+                ),
+            },
             "reference_population": {
                 "name": self.reference_name,
                 "size": self.reference_size,
@@ -59,6 +79,22 @@ def midrank_percentile(value: float, population: pd.Series) -> float:
     return 100.0 * (less + 0.5 * equal) / len(values)
 
 
+def school_style_score(value: float, population: pd.Series) -> float:
+    """Map comparative rank to an intuitive school-style score."""
+    values = pd.to_numeric(population, errors="coerce").dropna().to_numpy()
+    if not np.isfinite(value):
+        raise ValueError("rating value must be finite")
+    if len(values) == 0:
+        raise ValueError("reference population has no numeric values")
+    less = int(np.sum(values < value))
+    equal = int(np.sum(values == value))
+    probability = (less + 0.5 * equal + 0.5) / (len(values) + 1.0)
+    score = SCHOOL_SCORE_CENTER + SCHOOL_SCORE_SPREAD * NormalDist().inv_cdf(
+        probability
+    )
+    return min(max(score, 0.0), SCHOOL_SCORE_MAXIMUM)
+
+
 def rate_squad(
     projection: SquadProjection,
     references: pd.DataFrame,
@@ -72,7 +108,7 @@ def rate_squad(
             + ", ".join(sorted(missing))
         )
     projection_values = projection.as_dict()
-    scores = {
+    percentiles = {
         name: round(
             midrank_percentile(
                 float(projection_values[column]),
@@ -82,27 +118,43 @@ def rate_squad(
         )
         for name, column in RATING_COMPONENTS.items()
     }
+    scores = {
+        name: round(
+            school_style_score(
+                float(projection_values[column]),
+                references[column],
+            ),
+            1,
+        )
+        for name, column in RATING_COMPONENTS.items()
+    }
     strengths = tuple(
-        name for name, score in scores.items() if score >= 75.0
+        name for name, score in scores.items() if score >= 85.0
     )
     weaknesses = tuple(
-        name for name, score in scores.items() if score <= 25.0
+        name for name, score in scores.items() if score <= 65.0
     )
     overall = scores["overall"]
+    overall_percentile = percentiles["overall"]
     interpretation = (
-        f"Overall projection ranks at the {overall:.1f}th percentile "
-        f"of {len(references)} {reference_name} squads. Overall is calculated "
-        "directly from projected XI points plus the captain bonus; it is not "
-        "an average of the component scores."
+        f"Overall score is {overall:.1f}/100; the underlying projection ranks "
+        f"at the {overall_percentile:.1f}th percentile of the "
+        f"{len(references)}-squad {reference_name}. A median reference squad "
+        "scores 75. Overall is calculated directly from projected XI points "
+        "plus the captain bonus; it is not an average of component scores."
     )
     uncertainties = tuple(projection.warnings) + (
         "Ratings are relative to a simulated reference population and inherit "
         "the uncertainty and omissions of the player-point model.",
         "Bench points are reported separately and are not included in overall "
         "unless a future chip- or substitution-aware simulation is used.",
+        "Automatic substitutions and vice-captain takeover are not simulated.",
+        "The school-style score is a monotonic display calibration; consult the "
+        "saved percentile and raw projected points for the underlying evidence.",
     )
     return SquadRating(
         scores=scores,
+        percentiles=percentiles,
         reference_name=reference_name,
         reference_size=len(references),
         interpretation=interpretation,

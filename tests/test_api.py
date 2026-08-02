@@ -77,3 +77,28 @@ def test_dynamic_endpoints_require_positive_integer_ids(value: Any) -> None:
 
     with pytest.raises(ValueError, match="positive integer"):
         client.get_element_summary(value)  # type: ignore[arg-type]
+
+
+def test_manager_and_standings_endpoint_paths() -> None:
+    manager_session = FakeSession(
+        FakeResponse({"id": 5, "leagues": {"classic": []}})
+    )
+    manager_client = FPLClient(
+        "https://example.test/api/",
+        session=manager_session,  # type: ignore[arg-type]
+    )
+    assert manager_client.get_manager(5)["id"] == 5
+    assert manager_session.calls[0][0] == "https://example.test/api/entry/5/"
+
+    standings_session = FakeSession(
+        FakeResponse({"standings": {"results": []}})
+    )
+    standings_client = FPLClient(
+        "https://example.test/api/",
+        session=standings_session,  # type: ignore[arg-type]
+    )
+    standings_client.get_classic_league_standings(314, 2)
+    assert standings_session.calls[0][0] == (
+        "https://example.test/api/leagues-classic/314/standings/"
+        "?page_standings=2"
+    )

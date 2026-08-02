@@ -163,6 +163,63 @@ def project_squad(
     )
 
 
+def player_projection_details(
+    squad: ValidatedSquad,
+    predictions: pd.DataFrame,
+    horizon: int,
+) -> list[dict[str, Any]]:
+    """Return auditable player-level points and optional expected minutes."""
+    prediction_columns = [
+        column
+        for column in predictions.columns
+        if column not in squad.player_rows.columns or column == "player_id"
+    ]
+    combined = squad.player_rows.merge(
+        predictions.loc[:, prediction_columns],
+        on="player_id",
+        how="left",
+        validate="one_to_one",
+    )
+    adjusted, _ = add_availability_adjusted_predictions(combined, horizon)
+    indexed = adjusted.set_index("player_id")
+    order = list(squad.selection.starting_xi) + list(squad.selection.bench)
+    details = []
+    for bench_order, player_id in enumerate(order):
+        row = indexed.loc[player_id]
+        is_starter = bench_order < len(squad.selection.starting_xi)
+        item: dict[str, Any] = {
+            "player_id": int(player_id),
+            "display_name": str(row.get("display_name", player_id)),
+            "club_name": str(row.get("club_name", "")),
+            "position": str(row.get("position_short_name", "")),
+            "lineup_role": "starter" if is_starter else "bench",
+            "is_captain": player_id == squad.selection.captain,
+            "is_vice_captain": player_id == squad.selection.vice_captain,
+            "predicted_points": float(row[f"predicted_points_{horizon}"]),
+            "availability_factor_first_gameweek": float(
+                row["availability_factor"]
+            ),
+            "availability_adjusted_points": float(
+                row["availability_adjusted_points"]
+            ),
+        }
+        minutes_column = f"predicted_minutes_{horizon}"
+        if minutes_column in indexed:
+            expected_minutes = float(row[minutes_column])
+            first_minutes = (
+                float(row["predicted_minutes_1"])
+                if horizon > 1 and "predicted_minutes_1" in indexed
+                else expected_minutes
+            )
+            item["expected_minutes"] = expected_minutes
+            item["availability_adjusted_expected_minutes"] = (
+                expected_minutes
+                - first_minutes * (1.0 - float(row["availability_factor"]))
+            )
+        details.append(item)
+    return details
+
+
 def _find_position(rules: SquadRules, expected: str) -> str:
     matches = [
         position.short_name

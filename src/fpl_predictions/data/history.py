@@ -94,7 +94,7 @@ def ingest_finished_gameweeks(
     ingested_at: datetime | None = None,
 ) -> HistoryIngestion:
     """Ingest finalized live stats and fixture metadata into an immutable run."""
-    _validate_season(season)
+    validate_season(season)
     if through_gameweek is not None and through_gameweek <= 0:
         raise ValueError("through_gameweek must be positive")
     timestamp = ingested_at or datetime.now(timezone.utc)
@@ -184,9 +184,8 @@ def ingest_finished_gameweeks(
     )
 
 
-def _validate_season(season: str) -> None:
+def validate_season(season: str) -> None:
     if not SEASON_PATTERN.fullmatch(season) or season in {".", ".."}:
         raise ValueError(
             "season must contain only letters, digits, dots, underscores, or hyphens"
         )
-

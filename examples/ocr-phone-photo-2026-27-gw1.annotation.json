@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "task": "fpl_screenshot_to_squad",
+  "image_file": null,
+  "image_source_note": "Conversation upload; copy the original image into the dataset and set image_file before automated training.",
+  "snapshot_id": "20260730T162356213385Z",
+  "season": "2026-27",
+  "gameweek": 1,
+  "expected_formation": "4-4-2",
+  "expected_players": [
+    {
+      "visible_text": "Martinez",
+      "player_id": 28,
+      "display_name": "Martinez",
+      "position": "GKP",
+      "role": "starter",
+      "vice_captain": true
+    },
+    {
+      "visible_text": "Gabriel",
+      "player_id": 4,
+      "display_name": "Gabriel",
+      "position": "DEF",
+      "role": "starter"
+    },
+    {
+      "visible_text": "Gvardiol",
+      "player_id": 391,
+      "display_name": "Gvardiol",
+      "position": "DEF",
+      "role": "starter"
+    },
+    {
+      "visible_text": "Vuskovic",
+      "player_id": 504,
+      "display_name": "Vuskovic",
+      "position": "DEF",
+      "role": "starter"
+    },
+    {
+      "visible_text": "Van Hecke",
+      "player_id": 112,
+      "display_name": "Van Hecke",
+      "position": "DEF",
+      "role": "starter"
+    },
+    {
+      "visible_text": "Saka",
+      "player_id": 12,
+      "display_name": "Saka",
+      "position": "MID",
+      "role": "starter"
+    },
+    {
+      "visible_text": "Mitoma",
+      "player_id": 121,
+      "display_name": "Mitoma",
+      "position": "MID",
+      "role": "starter",
+      "availability_badge_visible": true
+    },
+    {
+      "visible_text": "Rice",
+      "player_id": 13,
+      "display_name": "Rice",
+      "position": "MID",
+      "role": "starter"
+    },
+    {
+      "visible_text": "Manzambi",
+      "player_id": 53,
+      "display_name": "Manzambi",
+      "position": "MID",
+      "role": "starter"
+    },
+    {
+      "visible_text": "Haaland",
+      "player_id": 411,
+      "display_name": "Haaland",
+      "position": "FWD",
+      "role": "starter",
+      "captain": true
+    },
+    {
+      "visible_text": "João Pedro",
+      "player_id": 165,
+      "display_name": "João Pedro",
+      "position": "FWD",
+      "role": "starter"
+    },
+    {
+      "visible_text": "Pickford",
+      "player_id": 226,
+      "display_name": "Pickford",
+      "position": "GKP",
+      "role": "bench",
+      "bench_order": 1
+    },
+    {
+      "visible_text": "Davis",
+      "player_id": 305,
+      "display_name": "Davis",
+      "position": "DEF",
+      "role": "bench",
+      "bench_order": 2
+    },
+    {
+      "visible_text": "O'Riley",
+      "player_id": 126,
+      "display_name": "O'Riley",
+      "position": "MID",
+      "role": "bench",
+      "bench_order": 3
+    },
+    {
+      "visible_text": "Kusi-Asare",
+      "player_id": 272,
+      "display_name": "Kusi-Asare",
+      "position": "FWD",
+      "role": "bench",
+      "bench_order": 4
+    }
+  ],
+  "matching_notes": [
+    "Martinez is resolved to goalkeeper Emiliano Martinez using the GKP slot; the current roster also contains defender Lisandro Martinez.",
+    "Gabriel is resolved to defender Gabriel Magalhaes using the DEF row.",
+    "The photograph includes perspective distortion, glare, and a phone bezel, making it a useful harder OCR example.",
+    "No word-level bounding boxes are asserted because the original image is not locally available for exact measurement."
+  ]
+}

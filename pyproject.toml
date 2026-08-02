@@ -33,6 +33,7 @@ fpl-download-history = "fpl_predictions.historical_download_cli:main"
 fpl-build-historical-training = "fpl_predictions.backfill_cli:main"
 fpl-predict-players = "fpl_predictions.predict_cli:main"
 fpl-rate-squad = "fpl_predictions.squad_cli:main"
+fpl-snapshot-managers = "fpl_predictions.manager_sample_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

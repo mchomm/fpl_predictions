@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.base import clone
 
 
 class HistoricalMeanRegressor(RegressorMixin, BaseEstimator):
@@ -64,3 +65,40 @@ class RecentPointsRegressor(RegressorMixin, BaseEstimator):
             "horizon": self.horizon,
         }
 
+
+class RecentWithModelFallbackRegressor(RegressorMixin, BaseEstimator):
+    """Use transparent recent minutes, with a learned cold-start fallback."""
+
+    def __init__(
+        self,
+        recent_column: str,
+        horizon: int,
+        fallback_estimator: object,
+    ) -> None:
+        self.recent_column = recent_column
+        self.horizon = horizon
+        self.fallback_estimator = fallback_estimator
+
+    def fit(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series | np.ndarray,
+    ) -> "RecentWithModelFallbackRegressor":
+        if self.recent_column not in X:
+            raise ValueError(f"Missing recent feature {self.recent_column!r}")
+        self.fitted_fallback_ = clone(self.fallback_estimator)
+        self.fitted_fallback_.fit(X, y)
+        return self
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        if not hasattr(self, "fitted_fallback_"):
+            raise ValueError(
+                "RecentWithModelFallbackRegressor has not been fitted"
+            )
+        recent = pd.to_numeric(X[self.recent_column], errors="coerce")
+        predictions = recent * self.horizon
+        missing = predictions.isna()
+        if missing.any():
+            fallback = np.asarray(self.fitted_fallback_.predict(X), dtype=float)
+            predictions.loc[missing] = fallback[missing.to_numpy()]
+        return predictions.to_numpy(dtype=float)

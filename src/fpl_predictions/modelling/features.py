@@ -54,9 +54,17 @@ DERIVED_NUMERIC_PREFIXES = (
     "recent_points_",
     "recent_minutes_",
     "recent_gameweeks_",
+    "recent_appearance_",
+    "recent_start_",
     "upcoming_fixture_",
     "upcoming_home_fixture_",
     "upcoming_away_fixture_",
+    "club_attack_strength",
+    "club_goals_conceded_strength",
+    "club_strength_matches",
+    "upcoming_opponent_",
+    "upcoming_attacking_fixture_",
+    "upcoming_defensive_fixture_",
 )
 
 

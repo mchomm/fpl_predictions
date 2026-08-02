@@ -17,6 +17,7 @@ from fpl_predictions.data.storage import (
     write_json,
     write_parquet,
 )
+from fpl_predictions.data.team_strength import add_team_strength_features
 from fpl_predictions.sources.vaastav import (
     SOURCE_NAME,
     audit_season_directory,
@@ -181,6 +182,7 @@ def reconstruct_season(
     normalized_horizons = _validate_horizons(horizons)
     audit_season_directory(season_dir, season)
     fixtures = pd.read_csv(season_dir / "fixtures.csv", low_memory=False)
+    teams = pd.read_csv(season_dir / "teams.csv", low_memory=False)
     raw = pd.read_csv(
         season_dir / "gws" / "merged_gw.csv",
         low_memory=False,
@@ -255,6 +257,26 @@ def reconstruct_season(
     )
     gameweeks["season"] = season
 
+    team_ids = teams.set_index("name")["id"]
+    gameweeks["_club_id"] = gameweeks["club_name"].map(team_ids)
+    if gameweeks["_club_id"].isna().any():
+        missing_clubs = sorted(
+            gameweeks.loc[gameweeks["_club_id"].isna(), "club_name"]
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+        raise BackfillValidationError(
+            f"{season} has archived players with unknown clubs: {missing_clubs}"
+        )
+    strength_fixtures = fixtures.rename(
+        columns={
+            "event": "gameweek_id",
+            "team_h": "home_club_id",
+            "team_a": "away_club_id",
+        }
+    )
+
     period_times = period_times.to_dict()
     gameweeks["snapshot_timestamp"] = gameweeks["snapshot_gameweek"].map(
         period_times
@@ -295,6 +317,29 @@ def reconstruct_season(
     )
     gameweeks[f"recent_points_mean_{recent_window}"] = recent_points
     gameweeks[f"recent_minutes_mean_{recent_window}"] = recent_minutes
+    gameweeks["_gameweek_appeared"] = gameweeks[minutes_column].gt(0).astype(float)
+    if "gameweek_starts" in gameweeks:
+        gameweeks["_gameweek_started"] = (
+            gameweeks["gameweek_starts"].gt(0).astype(float)
+        )
+    else:
+        gameweeks["_gameweek_started"] = (
+            gameweeks[minutes_column].ge(60).astype(float)
+        )
+    recent_appearance, _ = _past_window_mean(
+        gameweeks,
+        "_gameweek_appeared",
+        recent_window,
+        league_wide_blanks,
+    )
+    recent_start, _ = _past_window_mean(
+        gameweeks,
+        "_gameweek_started",
+        recent_window,
+        league_wide_blanks,
+    )
+    gameweeks[f"recent_appearance_rate_{recent_window}"] = recent_appearance
+    gameweeks[f"recent_start_rate_{recent_window}"] = recent_start
     gameweeks["recent_gameweeks_available"] = recent_available
 
     for horizon in normalized_horizons:
@@ -327,6 +372,41 @@ def reconstruct_season(
             horizon,
             league_wide_blanks,
         )
+        gameweeks[_label_column(horizon, "minutes")] = _future_window_sum(
+            gameweeks,
+            minutes_column,
+            horizon,
+            league_wide_blanks,
+        )
+        gameweeks[_label_column(horizon, "appearances")] = _future_window_sum(
+            gameweeks,
+            "_gameweek_appeared",
+            horizon,
+            league_wide_blanks,
+        )
+        gameweeks[_label_column(horizon, "starts")] = _future_window_sum(
+            gameweeks,
+            "_gameweek_started",
+            horizon,
+            league_wide_blanks,
+        )
+
+    strength_groups = []
+    for snapshot_gameweek, group in gameweeks.groupby(
+        "snapshot_gameweek", sort=True
+    ):
+        strength_groups.append(
+            add_team_strength_features(
+                group,
+                strength_fixtures,
+                int(snapshot_gameweek),
+                normalized_horizons,
+                club_column="_club_id",
+            )
+        )
+    gameweeks = pd.concat(strength_groups, ignore_index=True).drop(
+        columns=["_club_id", "_gameweek_appeared", "_gameweek_started"]
+    )
 
     return gameweeks
 
@@ -439,6 +519,7 @@ def _validate_horizons(horizons: Sequence[int]) -> tuple[int, ...]:
     return values
 
 
-def _label_column(horizon: int) -> str:
+def _label_column(horizon: int, target: str = "points") -> str:
     suffix = "gameweek" if horizon == 1 else "gameweeks"
-    return f"label_next_{horizon}_{suffix}"
+    target_prefix = "" if target == "points" else f"{target}_"
+    return f"label_{target_prefix}next_{horizon}_{suffix}"

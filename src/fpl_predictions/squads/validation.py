@@ -73,6 +73,11 @@ def validate_squad(
         errors.append("captain must be in the starting XI")
     if squad.vice_captain not in xi_set:
         errors.append("vice-captain must be in the starting XI")
+    if squad.active_chip is not None:
+        errors.append(
+            "active_chip scoring is not supported yet; rate the normal squad "
+            "or omit active_chip"
+        )
 
     indexed = players.drop_duplicates("player_id").set_index("player_id")
     stale_ids = sorted(squad_set.difference(indexed.index))
@@ -179,4 +184,3 @@ def _check_length_and_uniqueness(
         errors.append(f"{label} must contain {expected} players, got {len(values)}")
     if len(set(values)) != len(values):
         errors.append(f"{label} contains duplicate players")
-

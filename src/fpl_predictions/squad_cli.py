@@ -19,7 +19,10 @@ from fpl_predictions.squads.generation import (
     REFERENCE_STRATEGIES,
     generate_reference_population,
 )
-from fpl_predictions.squads.projection import project_squad
+from fpl_predictions.squads.projection import (
+    player_projection_details,
+    project_squad,
+)
 from fpl_predictions.squads.ratings import rate_squad
 from fpl_predictions.squads.rules import SquadRules
 from fpl_predictions.squads.schemas import SquadSelection
@@ -42,7 +45,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--strategy",
         choices=sorted(REFERENCE_STRATEGIES),
-        default="price_aware",
+        default="human_like",
+    )
+    parser.add_argument(
+        "--reference-budget-band",
+        type=float,
+        default=1.0,
+        help=(
+            "For human_like references, spend within this many millions of "
+            "the official budget (default: 1.0)."
+        ),
     )
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--output", type=Path)
@@ -75,11 +87,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             size=args.reference_size,
             strategy=args.strategy,
             seed=args.seed,
+            target_cost=rules.budget,
+            budget_band=args.reference_budget_band,
         )
-        reference_name = (
-            f"{args.strategy} legal squads (horizon={args.horizon}, "
-            f"seed={args.seed})"
-        )
+        if args.strategy == "human_like":
+            reference_name = (
+                "ownership-conditioned, budget-matched legal reference "
+                f"population (horizon={args.horizon}, seed={args.seed})"
+            )
+        else:
+            reference_name = (
+                f"{args.strategy} legal reference population "
+                f"(horizon={args.horizon}, seed={args.seed})"
+            )
         rating = rate_squad(projection, references, reference_name)
 
         if args.output:
@@ -105,6 +125,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
             "rules": asdict(rules),
             "projection": projection.as_dict(),
+            "player_projections": player_projection_details(
+                validated,
+                predictions,
+                args.horizon,
+            ),
             "rating": rating.as_dict(),
             "reference_configuration": {
                 "strategy": args.strategy,
@@ -112,7 +137,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "seed": args.seed,
                 "horizon": args.horizon,
                 "percentile_method": "empirical midrank",
+                "selection_prior": (
+                    "product of current player ownership percentages, with a "
+                    "0.1 percentage-point measurement-resolution floor; "
+                    "conditional-independence approximation"
+                    if args.strategy == "human_like"
+                    else args.strategy
+                ),
+                "target_cost": (
+                    rules.budget if args.strategy == "human_like" else None
+                ),
+                "budget_band": (
+                    args.reference_budget_band
+                    if args.strategy == "human_like"
+                    else None
+                ),
+                "lineup_policy": (
+                    "model-best legal XI and model-best captain from each squad"
+                ),
             },
+            "reference_summary": _reference_summary(references, players),
             "reference_file": str(references_path.resolve()),
         }
         write_parquet(references_path, references)
@@ -132,6 +176,68 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Report: {report_path}")
     print(f"References: {references_path}")
     return 0
+
+
+def _reference_summary(
+    references: pd.DataFrame,
+    players: pd.DataFrame,
+) -> dict[str, object]:
+    """Expose the comparison distribution so high ratings remain auditable."""
+    costs = references["total_cost"]
+    overall = references["overall_points"]
+    summary: dict[str, object] = {
+        "cost": {
+            "minimum": float(costs.min()),
+            "median": float(costs.median()),
+            "maximum": float(costs.max()),
+        },
+        "overall_points": {
+            "p10": float(overall.quantile(0.10)),
+            "median": float(overall.median()),
+            "p90": float(overall.quantile(0.90)),
+            "p95": float(overall.quantile(0.95)),
+            "p99": float(overall.quantile(0.99)),
+            "maximum": float(overall.max()),
+        },
+    }
+    if "ownership_percent" in players and "player_ids" in references:
+        selected_ids = references["player_ids"].map(json.loads).explode()
+        generated_percent = (
+            selected_ids.value_counts() * 100.0 / len(references)
+        )
+        calibration = players.loc[
+            :, ["player_id", "ownership_percent"]
+        ].copy()
+        calibration["ownership_percent"] = pd.to_numeric(
+            calibration["ownership_percent"], errors="coerce"
+        )
+        calibration["generated_percent"] = (
+            calibration["player_id"].map(generated_percent).fillna(0.0)
+        )
+        valid = calibration.dropna(subset=["ownership_percent"])
+        correlation = (
+            valid[["ownership_percent", "generated_percent"]]
+            .corr()
+            .iloc[0, 1]
+        )
+        summary["ownership_calibration"] = {
+            "pearson_correlation": (
+                float(correlation) if pd.notna(correlation) else None
+            ),
+            "mean_absolute_error_percentage_points": float(
+                (
+                    valid["ownership_percent"]
+                    - valid["generated_percent"]
+                )
+                .abs()
+                .mean()
+            ),
+            "note": (
+                "Generated marginal inclusion versus current API ownership; "
+                "budget and legality conditioning can shift individual rates."
+            ),
+        }
+    return summary
 
 
 def _latest_predictions(directory: Path) -> Path:

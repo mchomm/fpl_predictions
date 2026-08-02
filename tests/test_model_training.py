@@ -41,6 +41,7 @@ def _training_table() -> pd.DataFrame:
                     "status": "a",
                     "club_id": player_id % 3,
                     "label_next_1_gameweek": points,
+                    "label_minutes_next_1_gameweek": 90.0,
                 }
             )
     return pd.DataFrame(rows)
@@ -77,3 +78,28 @@ def test_train_compare_save_load_and_predict(tmp_path) -> None:
     assert predictions["predicted_future_points"].notna().all()
     assert predictions["prediction_horizon"].unique().tolist() == [1]
     assert "player_id" not in artifact.schema.columns
+
+
+def test_train_expected_minutes_artifact(tmp_path) -> None:
+    table = _training_table()
+    result = train_horizon(
+        table,
+        horizon=1,
+        output_dir=tmp_path / "minutes-horizon-1",
+        min_train_periods=3,
+        calibration_bins=4,
+        random_seed=7,
+        source_paths=[],
+        target_kind="minutes",
+    )
+
+    artifact = load_artifact(result.model_path)
+    predictions = predict_players(artifact, table.iloc[:3])
+
+    assert artifact.metadata["target_kind"] == "minutes"
+    assert artifact.metadata["target"] == "label_minutes_next_1_gameweek"
+    assert {
+        "recent_minutes_mean",
+        "recent_minutes_with_model_fallback",
+    }.issubset(set(result.leaderboard["model"]))
+    assert predictions["predicted_future_points"].notna().all()
