@@ -412,6 +412,15 @@ pip install -e '.[web]'
 streamlit run streamlit_app.py
 ```
 
+Screenshot recognition is optional. The manual pitch builder exposes every
+formation allowed by the current FPL rules and collects all 11 starters, four
+substitutes, captain, vice-captain, and money in the bank. Both input routes
+produce the same validated squad. The main squad and optimizer results are
+shown on a responsive pitch using the official player portrait URLs included
+in the FPL snapshot, with a table retained underneath for detailed review.
+Contextual help explains ratings, projections, transfer gains, model training,
+validation metrics, and version information in supporter-friendly language.
+
 The application reads the immutable `deployment/current/` bundle. The bundle
 contains the active normalized player snapshot, predictions, three precomputed
 1,000-squad reference populations, FPL rules, and the checksummed point,

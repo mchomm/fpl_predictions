@@ -1,7 +1,8 @@
-"""Interactive FPL screenshot rating and optimization application."""
+"""Interactive FPL squad recognition, rating, and optimization application."""
 
 from __future__ import annotations
 
+from html import escape
 import json
 import os
 from pathlib import Path
@@ -13,36 +14,218 @@ import pandas as pd
 import streamlit as st
 
 # Community Cloud runs this entrypoint from the repository root. Add the
-# src-layout package directly so deployment does not need an editable install
-# of the repository itself.
+# src-layout package directly so deployment does not need an editable install.
 REPOSITORY_ROOT = Path(__file__).resolve().parent
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from fpl_predictions.screenshot.recognition import (
+from fpl_predictions.screenshot.recognition import (  # noqa: E402
     ScreenshotRecognitionError,
     recognize_screenshot,
 )
-from fpl_predictions.serving.bundle import (
+from fpl_predictions.serving.bundle import (  # noqa: E402
     ServingBundleError,
     load_serving_bundle,
 )
-from fpl_predictions.serving.services import (
+from fpl_predictions.serving.presentation import (  # noqa: E402
+    POSITION_ORDER,
+    build_manual_selection,
+    formation_counts,
+    legal_formations,
+    selection_defaults,
+    slot_positions,
+)
+from fpl_predictions.serving.services import (  # noqa: E402
     optimize_selection,
-    player_label_lookup,
     rate_selection,
 )
-from fpl_predictions.squads.schemas import SquadSelection
-from fpl_predictions.squads.validation import SquadValidationError, validate_squad
+from fpl_predictions.squads.schemas import SquadSelection  # noqa: E402
+from fpl_predictions.squads.validation import (  # noqa: E402
+    SquadValidationError,
+    validate_squad,
+)
 
 
 BUNDLE_ROOT = Path(os.getenv("FPL_SERVING_BUNDLE", "deployment/current"))
+SCORE_HELP = {
+    "overall": (
+        "Projected starting-XI points plus the extra captain points, compared "
+        "with 1,000 legal, budget-matched, human-like squads."
+    ),
+    "goalkeeper": "How strongly the starting goalkeeper projects over this window.",
+    "defence": "Combined projection from starting defenders.",
+    "midfield": "Combined projection from starting midfielders.",
+    "attack": "Combined projection from starting forwards.",
+    "bench": "Combined projection of the four substitutes, shown separately.",
+    "captaincy": "The selected captain's projected bonus contribution.",
+}
+POSITION_NAMES = {
+    "GKP": "Goalkeeper",
+    "DEF": "Defenders",
+    "MID": "Midfielders",
+    "FWD": "Forwards",
+}
+CLUB_COLOURS = {
+    "ARS": ("#ef0107", "#ffffff"),
+    "AVL": ("#670e36", "#95bfe5"),
+    "BOU": ("#da291c", "#ffffff"),
+    "BRE": ("#e30613", "#ffffff"),
+    "BHA": ("#0057b8", "#ffffff"),
+    "CHE": ("#034694", "#ffffff"),
+    "COV": ("#66ccff", "#10233f"),
+    "CRY": ("#1b458f", "#ffffff"),
+    "EVE": ("#003399", "#ffffff"),
+    "FUL": ("#111111", "#ffffff"),
+    "HUL": ("#f5a12d", "#111111"),
+    "IPS": ("#3a64a3", "#ffffff"),
+    "LEE": ("#ffcd00", "#1d428a"),
+    "LIV": ("#c8102e", "#ffffff"),
+    "MCI": ("#6cabdd", "#10233f"),
+    "MUN": ("#da291c", "#ffffff"),
+    "NEW": ("#171717", "#ffffff"),
+    "NFO": ("#dd0000", "#ffffff"),
+    "TOT": ("#132257", "#ffffff"),
+    "SUN": ("#eb172b", "#ffffff"),
+}
 
 
-@st.cache_resource(show_spinner="Loading current FPL models and data…")
+@st.cache_resource(show_spinner="Loading the latest predictions…")
 def _bundle() -> Any:
     return load_serving_bundle(BUNDLE_ROOT)
+
+
+@st.cache_data(show_spinner=False)
+def _model_metadata(bundle_root: str, horizon: int) -> dict[str, Any]:
+    path = Path(bundle_root) / "models" / "points" / f"horizon-{horizon}" / "metadata.json"
+    if not path.is_file():
+        return {}
+    value = json.loads(path.read_text(encoding="utf-8"))
+    return value if isinstance(value, dict) else {}
+
+
+def _inject_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+          --fpl-purple: #37003c;
+          --fpl-purple-2: #5b1465;
+          --fpl-green: #00ff87;
+          --fpl-cyan: #04f5ff;
+          --ink: #172033;
+          --muted: #637083;
+          --panel: rgba(255, 255, 255, .92);
+        }
+        .stApp {
+          background:
+            radial-gradient(circle at 90% 0%, rgba(4,245,255,.15), transparent 28rem),
+            radial-gradient(circle at 0% 18%, rgba(0,255,135,.11), transparent 24rem),
+            #f5f6fb;
+          color: var(--ink);
+        }
+        [data-testid="stHeader"] { background: rgba(245,246,251,.82); }
+        [data-testid="stSidebar"] {
+          background: linear-gradient(180deg, #2a032f 0%, #43004a 100%);
+        }
+        [data-testid="stSidebar"] * { color: #fff; }
+        [data-testid="stSidebar"] [data-baseweb="select"] * { color: #172033; }
+        .block-container { max-width: 1240px; padding-top: 2.25rem; }
+        h1, h2, h3 { letter-spacing: -.025em; }
+        h1 { color: var(--fpl-purple); font-weight: 850 !important; }
+        .hero-strip {
+          position: relative; overflow: hidden; margin: .25rem 0 1.5rem;
+          padding: 1.15rem 1.35rem; border-radius: 20px;
+          background: linear-gradient(120deg, #37003c 0%, #6a1675 64%, #04aeb5 140%);
+          color: white; box-shadow: 0 14px 36px rgba(55,0,60,.18);
+        }
+        .hero-strip:after {
+          content: "⚽"; position: absolute; right: 1.1rem; top: -.9rem;
+          font-size: 6rem; opacity: .12; transform: rotate(-14deg);
+        }
+        .hero-kicker { color: var(--fpl-green); font-weight: 800; font-size: .78rem;
+          letter-spacing: .12em; text-transform: uppercase; }
+        .hero-copy { max-width: 760px; margin-top: .3rem; font-size: 1.02rem; opacity: .94; }
+        div[data-testid="stMetric"] {
+          background: var(--panel); border: 1px solid rgba(55,0,60,.09);
+          padding: .85rem 1rem; border-radius: 16px;
+          box-shadow: 0 5px 18px rgba(39,31,48,.055);
+        }
+        div[data-testid="stFileUploader"], div[data-testid="stExpander"] {
+          border-radius: 16px; overflow: hidden;
+        }
+        .stButton > button, .stDownloadButton > button {
+          border-radius: 999px; font-weight: 750; min-height: 2.7rem;
+        }
+        .stButton > button[kind="primary"] {
+          background: linear-gradient(90deg, #37003c, #681270);
+          border: 0; box-shadow: 0 7px 18px rgba(55,0,60,.2);
+        }
+        .fpl-pitch {
+          position: relative; overflow: hidden; border-radius: 24px;
+          padding: 2rem 1rem 1.4rem; margin: .8rem 0 1rem;
+          background: repeating-linear-gradient(90deg,#079a51 0,#079a51 12.5%,#06934c 12.5%,#06934c 25%);
+          box-shadow: inset 0 0 0 3px rgba(255,255,255,.23), 0 14px 35px rgba(4,82,45,.2);
+        }
+        .fpl-pitch:before {
+          content:""; position:absolute; left:50%; top:0; bottom:0; width:2px;
+          background:rgba(255,255,255,.48);
+        }
+        .fpl-pitch:after {
+          content:""; position:absolute; width:130px; height:130px; border:2px solid rgba(255,255,255,.48);
+          border-radius:50%; left:50%; top:50%; transform:translate(-50%,-50%);
+        }
+        .pitch-row { position:relative; z-index:1; display:flex; justify-content:space-evenly;
+          align-items:end; gap:.45rem; margin: .6rem auto 1.05rem; }
+        .player-card { width: min(118px, 18vw); min-width: 72px; text-align:center;
+          filter: drop-shadow(0 5px 6px rgba(0,0,0,.18)); }
+        .player-photo-wrap { height:78px; display:flex; align-items:flex-end; justify-content:center; }
+        .player-photo { height:78px; max-width:90px; object-fit:contain; object-position:center bottom; }
+        .player-fallback { width:58px; height:58px; border-radius:50%; display:grid; place-items:center;
+          color:white; font-size:1.5rem; font-weight:900; margin-bottom:6px; }
+        .player-label { position:relative; border-radius:9px; overflow:hidden; background:white; }
+        .club-band { height:5px; }
+        .player-name { color:#172033; font-size:.78rem; font-weight:850; padding:.34rem .18rem .08rem;
+          white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .player-meta { color:#637083; font-size:.61rem; font-weight:700; padding:0 .18rem .32rem; }
+        .captain-chip { position:absolute; top:-9px; left:-5px; width:22px; height:22px; border-radius:50%;
+          display:grid; place-items:center; background:#37003c; color:white; border:2px solid #00ff87;
+          font-size:.65rem; font-weight:900; z-index:2; }
+        .bench-shell { background:linear-gradient(135deg,#d9f7ea,#d8f2f5); border-radius:18px;
+          padding:.8rem; margin-top:.65rem; border:1px solid rgba(55,0,60,.08); }
+        .bench-title { color:#37003c; font-size:.75rem; font-weight:900; letter-spacing:.09em;
+          text-transform:uppercase; text-align:center; margin-bottom:.25rem; }
+        .bench-shell .pitch-row { margin:.35rem 0 .2rem; }
+        .blank-player { height:70px; width:58px; border:2px dashed rgba(255,255,255,.65);
+          border-radius:50% 50% 12px 12px; display:grid; place-items:center; color:white;
+          font-size:1.4rem; margin:0 auto 8px; }
+        .st-key-manual_pitch, .st-key-edit_pitch {
+          position:relative; border-radius:24px; padding:1.1rem 1rem 1.35rem;
+          background:repeating-linear-gradient(90deg,#079a51 0,#079a51 12.5%,#06934c 12.5%,#06934c 25%);
+          box-shadow:inset 0 0 0 3px rgba(255,255,255,.22),0 12px 30px rgba(4,82,45,.18);
+        }
+        .st-key-manual_pitch label, .st-key-edit_pitch label { color:white !important; font-weight:800; }
+        .pitch-section-title { position:relative; z-index:2; text-align:center; color:white;
+          font-size:.72rem; font-weight:900; letter-spacing:.1em; text-transform:uppercase;
+          margin:.55rem 0 .2rem; text-shadow:0 1px 3px rgba(0,0,0,.2); }
+        .guide-card { height:100%; background:white; border:1px solid rgba(55,0,60,.08);
+          border-radius:18px; padding:1rem 1.05rem; box-shadow:0 7px 22px rgba(39,31,48,.055); }
+        .guide-icon { font-size:1.45rem; }
+        .guide-title { color:#37003c; font-weight:850; margin:.3rem 0 .35rem; }
+        .guide-copy { color:#586579; font-size:.9rem; line-height:1.48; }
+        .source-note { color:#6b7280; font-size:.75rem; text-align:center; margin-top:.3rem; }
+        @media(max-width:700px) {
+          .block-container { padding:1.2rem .7rem; }
+          .fpl-pitch { padding-left:.25rem; padding-right:.25rem; }
+          .player-photo-wrap,.player-photo { height:58px; }
+          .player-name { font-size:.64rem; }
+          .player-meta { font-size:.53rem; }
+          .pitch-row { gap:.15rem; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _set_selection(selection: SquadSelection, audit: dict[str, Any] | None = None) -> None:
@@ -57,143 +240,359 @@ def _selection() -> SquadSelection | None:
     return SquadSelection.from_mapping(payload) if isinstance(payload, dict) else None
 
 
-def _player_table(bundle: Any, selection: SquadSelection) -> pd.DataFrame:
+def _friendly_labels(players: pd.DataFrame) -> dict[int, str]:
+    return {
+        int(row.player_id): (
+            f"{row.display_name} · {row.club_short_name} · £{float(row.price):.1f}m"
+        )
+        for row in players.itertuples()
+    }
+
+
+def _position_options(players: pd.DataFrame, position: str) -> list[int]:
+    pool = players.loc[players["position_short_name"].eq(position)].copy()
+    if "can_select" in pool:
+        selectable = pool["can_select"].fillna(True).astype(bool)
+        pool = pool.loc[selectable]
+    return pool.sort_values(
+        ["price", "display_name"], ascending=[False, True]
+    )["player_id"].astype(int).tolist()
+
+
+def _club_colours(short_name: str) -> tuple[str, str]:
+    return CLUB_COLOURS.get(short_name, ("#37003c", "#ffffff"))
+
+
+def _player_card(row: pd.Series | None, marker: str = "") -> str:
+    if row is None:
+        return (
+            '<div class="player-card"><div class="blank-player">+</div>'
+            '<div class="player-label"><div class="club-band" style="background:#00ff87"></div>'
+            '<div class="player-name">Choose player</div><div class="player-meta">Empty slot</div>'
+            "</div></div>"
+        )
+    club = str(row.get("club_short_name") or "")
+    accent, foreground = _club_colours(club)
+    name = escape(str(row["display_name"]))
+    photo = row.get("photo_url")
+    marker_html = (
+        f'<span class="captain-chip">{escape(marker)}</span>' if marker else ""
+    )
+    if pd.notna(photo) and photo:
+        image_html = (
+            f'<img class="player-photo" src="{escape(str(photo), quote=True)}" '
+            f'alt="{name}" loading="lazy">'
+        )
+    else:
+        initials = "".join(part[:1] for part in name.split()[:2]).upper() or "?"
+        image_html = (
+            f'<div class="player-fallback" style="background:{accent};color:{foreground}">'
+            f"{escape(initials)}</div>"
+        )
+    return (
+        f'<div class="player-card">{marker_html}<div class="player-photo-wrap">{image_html}</div>'
+        f'<div class="player-label"><div class="club-band" style="background:{accent}"></div>'
+        f'<div class="player-name">{name}</div>'
+        f'<div class="player-meta">{escape(club)} · £{float(row["price"]):.1f}m</div>'
+        "</div></div>"
+    )
+
+
+def _pitch_html(bundle: Any, selection: SquadSelection) -> str:
+    indexed = bundle.players.drop_duplicates("player_id").set_index("player_id")
+    rows: list[str] = []
+    for position in POSITION_ORDER:
+        player_ids = [
+            player_id
+            for player_id in selection.starting_xi
+            if str(indexed.loc[player_id, "position_short_name"]) == position
+        ]
+        cards = []
+        for player_id in player_ids:
+            marker = (
+                "C" if player_id == selection.captain else "V" if player_id == selection.vice_captain else ""
+            )
+            cards.append(_player_card(indexed.loc[player_id], marker))
+        rows.append(f'<div class="pitch-row">{"".join(cards)}</div>')
+    bench_cards = []
+    for player_id in selection.bench:
+        bench_cards.append(_player_card(indexed.loc[player_id]))
+    return (
+        f'<div class="fpl-pitch">{"".join(rows)}</div>'
+        '<div class="bench-shell"><div class="bench-title">Substitutes</div>'
+        f'<div class="pitch-row">{"".join(bench_cards)}</div></div>'
+        '<div class="source-note">Player portraits are supplied by the official Premier League data feed.</div>'
+    )
+
+
+def _player_table(bundle: Any, selection: SquadSelection, horizon: int) -> pd.DataFrame:
     indexed = bundle.players.set_index("player_id")
+    predictions = bundle.predictions.set_index("player_id")
     records = []
-    for role, values in (
-        ("Starter", selection.starting_xi),
-        ("Bench", selection.bench),
-    ):
+    for role, values in (("Starter", selection.starting_xi), ("Sub", selection.bench)):
         for order, player_id in enumerate(values, start=1):
             row = indexed.loc[player_id]
+            prediction = predictions.loc[player_id]
             records.append(
                 {
                     "Role": role,
                     "Order": order,
                     "Player": row["display_name"],
-                    "Club": row["club_name"],
-                    "Position": row["position_short_name"],
-                    "Price": float(row["price"]),
-                    "Captaincy": (
-                        "C"
-                        if player_id == selection.captain
-                        else "V"
-                        if player_id == selection.vice_captain
-                        else ""
+                    "Club": row["club_short_name"],
+                    "Pos": row["position_short_name"],
+                    "Price": f"£{float(row['price']):.1f}m",
+                    "Captain": "C" if player_id == selection.captain else "V" if player_id == selection.vice_captain else "",
+                    f"Projected ({horizon} GW)": round(
+                        float(prediction.get(f"predicted_points_{horizon}", 0.0)),
+                        2,
                     ),
-                    "ID": int(player_id),
                 }
             )
     return pd.DataFrame(records)
-
-
-def _render_editor(bundle: Any, selection: SquadSelection) -> SquadSelection:
-    labels, _ = player_label_lookup(bundle.players)
-    indexed = bundle.players.set_index("player_id")
-    st.subheader("Review and edit squad")
-    st.caption(
-        "Every OCR match remains editable. Player IDs stay attached to names, "
-        "so corrections are validated against the current database."
-    )
-    edited_starters = []
-    edited_bench = []
-    tabs = st.tabs(["Starting XI", "Bench and order"])
-    with tabs[0]:
-        columns = st.columns(3)
-        for index, player_id in enumerate(selection.starting_xi):
-            position = str(indexed.loc[player_id, "position_short_name"])
-            options = bundle.players.loc[
-                bundle.players["position_short_name"].eq(position), "player_id"
-            ].astype(int).tolist()
-            options.sort(key=lambda value: labels[value])
-            chosen = columns[index % 3].selectbox(
-                f"Starter {index + 1} · {position}",
-                options,
-                index=options.index(player_id),
-                format_func=lambda value, mapping=labels: mapping[value],
-                key=f"starter_editor_{index}",
-            )
-            edited_starters.append(int(chosen))
-    with tabs[1]:
-        columns = st.columns(2)
-        for index, player_id in enumerate(selection.bench):
-            position = str(indexed.loc[player_id, "position_short_name"])
-            options = bundle.players.loc[
-                bundle.players["position_short_name"].eq(position), "player_id"
-            ].astype(int).tolist()
-            options.sort(key=lambda value: labels[value])
-            chosen = columns[index % 2].selectbox(
-                f"Bench slot {index + 1} · {position}",
-                options,
-                index=options.index(player_id),
-                format_func=lambda value, mapping=labels: mapping[value],
-                key=f"bench_editor_{index}",
-            )
-            edited_bench.append(int(chosen))
-
-    starter_options = list(dict.fromkeys(edited_starters))
-    cap_col, vice_col = st.columns(2)
-    captain = cap_col.selectbox(
-        "Captain",
-        starter_options,
-        index=(
-            starter_options.index(selection.captain)
-            if selection.captain in starter_options
-            else 0
-        ),
-        format_func=lambda value: labels[value],
-        key="captain_editor",
-    )
-    vice_default = (
-        starter_options.index(selection.vice_captain)
-        if selection.vice_captain in starter_options
-        else min(1, len(starter_options) - 1)
-    )
-    vice = vice_col.selectbox(
-        "Vice-captain",
-        starter_options,
-        index=vice_default,
-        format_func=lambda value: labels[value],
-        key="vice_editor",
-    )
-    edited = SquadSelection(
-        player_ids=tuple(edited_starters + edited_bench),
-        starting_xi=tuple(edited_starters),
-        bench=tuple(edited_bench),
-        captain=int(captain),
-        vice_captain=int(vice),
-        source=selection.source,
-        bank=selection.bank,
-        budget_limit=selection.budget_limit,
-        purchase_prices=selection.purchase_prices,
-        selling_prices=selection.selling_prices,
-    )
-    if st.button("Apply and validate edits", type="primary"):
-        try:
-            validated = validate_squad(edited, bundle.players, bundle.rules)
-        except SquadValidationError as exc:
-            st.error(str(exc))
-        else:
-            _set_selection(edited, st.session_state.get("recognition_audit"))
-            st.success(
-                f"Legal {validated.formation} squad · £{validated.total_cost:.1f}m"
-            )
-            st.rerun()
-    return edited
 
 
 def _recognition_table(audit: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Slot": row["slot_id"],
-            "OCR": " / ".join(row["ocr_readings"]),
-            "Selected": row["display_name"],
+            "Text read": " / ".join(row["ocr_readings"]),
+            "Matched player": row["display_name"],
             "Confidence": f"{100 * row['match_score']:.1f}%",
-            "Alternatives": ", ".join(
+            "Other possibilities": ", ".join(
                 item["display_name"] for item in row["alternatives"][1:3]
             ),
         }
         for row in audit["slots"]
+    )
+
+
+def _render_slot(
+    bundle: Any,
+    position: str,
+    default: int,
+    *,
+    key: str,
+    label: str,
+) -> int:
+    labels = _friendly_labels(bundle.players)
+    options = [0] + _position_options(bundle.players, position)
+    if default not in options:
+        default = 0
+    holder = st.empty()
+    chosen = st.selectbox(
+        label,
+        options,
+        index=options.index(default),
+        format_func=lambda value: (
+            f"Choose {POSITION_NAMES[position].lower().rstrip('s')}…"
+            if value == 0
+            else labels[value]
+        ),
+        key=key,
+        help=f"Select one current FPL {POSITION_NAMES[position].lower().rstrip('s')}.",
+        label_visibility="collapsed",
+    )
+    row = None
+    if int(chosen) > 0:
+        row = bundle.players.set_index("player_id").loc[int(chosen)]
+    holder.markdown(_player_card(row), unsafe_allow_html=True)
+    return int(chosen)
+
+
+def _render_interactive_pitch(
+    bundle: Any,
+    formation: str,
+    existing: SquadSelection | None,
+    *,
+    key_prefix: str,
+    submit_label: str,
+    source: str,
+    budget_limit: float | None,
+) -> None:
+    starter_positions, bench_positions = slot_positions(formation, bundle.rules)
+    starter_defaults, bench_defaults = selection_defaults(
+        existing, formation, bundle.players, bundle.rules
+    )
+    selected_starters: list[int] = []
+    selected_bench: list[int] = []
+    with st.container(key=f"{key_prefix}_pitch"):
+        offset = 0
+        counts = formation_counts(formation, bundle.rules)
+        for position in POSITION_ORDER:
+            count = counts[position]
+            st.markdown(
+                f'<div class="pitch-section-title">{POSITION_NAMES[position]}</div>',
+                unsafe_allow_html=True,
+            )
+            columns = st.columns(count)
+            for index in range(count):
+                absolute = offset + index
+                with columns[index]:
+                    selected_starters.append(
+                        _render_slot(
+                            bundle,
+                            position,
+                            starter_defaults[absolute],
+                            key=f"{key_prefix}_{formation}_starter_{absolute}",
+                            label=f"Starter {absolute + 1} · {position}",
+                        )
+                    )
+            offset += count
+        st.markdown(
+            '<div class="pitch-section-title">Substitutes</div>',
+            unsafe_allow_html=True,
+        )
+        columns = st.columns(4)
+        for index, position in enumerate(bench_positions):
+            with columns[index]:
+                selected_bench.append(
+                    _render_slot(
+                        bundle,
+                        position,
+                        bench_defaults[index],
+                        key=f"{key_prefix}_{formation}_bench_{index}",
+                        label=f"Substitute {index + 1} · {position}",
+                    )
+                )
+
+    chosen_starters = [value for value in selected_starters if value > 0]
+    captain_default = existing.captain if existing and existing.captain in chosen_starters else 0
+    vice_default = existing.vice_captain if existing and existing.vice_captain in chosen_starters else 0
+    labels = _friendly_labels(bundle.players)
+    captain_options = [0] + list(dict.fromkeys(chosen_starters))
+    choice_cols = st.columns(3)
+    captain = choice_cols[0].selectbox(
+        "Captain",
+        captain_options,
+        index=captain_options.index(captain_default),
+        format_func=lambda value: "Choose captain…" if value == 0 else labels[value],
+        key=f"{key_prefix}_{formation}_captain",
+        help="Captain must be in the starting XI and receives double projected points.",
+    )
+    vice = choice_cols[1].selectbox(
+        "Vice-captain",
+        captain_options,
+        index=captain_options.index(vice_default),
+        format_func=lambda value: "Choose vice-captain…" if value == 0 else labels[value],
+        key=f"{key_prefix}_{formation}_vice",
+        help="Vice-captain takes over if the captain does not play.",
+    )
+    bank_default = float(existing.bank) if existing and existing.bank is not None else 0.0
+    bank = choice_cols[2].number_input(
+        "Money in bank (£m)",
+        min_value=0.0,
+        max_value=20.0,
+        value=bank_default,
+        step=0.1,
+        key=f"{key_prefix}_{formation}_bank",
+        help="Optional cash remaining for future transfers; use 0 if unknown.",
+    )
+
+    all_players = selected_starters + selected_bench
+    complete = all(value > 0 for value in all_players)
+    unique = len(set(all_players)) == len(all_players) if complete else False
+    indexed = bundle.players.set_index("player_id")
+    cost = sum(float(indexed.loc[value, "price"]) for value in all_players if value > 0)
+    status_cols = st.columns(3)
+    status_cols[0].metric("Formation", formation, help="The shape of your starting XI.", border=True)
+    status_cols[1].metric("Players selected", f"{sum(value > 0 for value in all_players)}/15", border=True)
+    status_cols[2].metric(
+        "Current cost",
+        f"£{cost:.1f}m",
+        help="Manual squads must respect the current £100m FPL budget.",
+        border=True,
+    )
+    if complete and not unique:
+        st.warning("A player has been selected more than once. Every slot must be unique.")
+    submitted = st.button(
+        submit_label,
+        type="primary",
+        width="stretch",
+        disabled=(
+            not complete
+            or not unique
+            or int(captain) <= 0
+            or int(vice) <= 0
+            or int(captain) == int(vice)
+        ),
+        key=f"{key_prefix}_{formation}_submit",
+    )
+    if submitted:
+        try:
+            candidate = build_manual_selection(
+                selected_starters,
+                selected_bench,
+                int(captain),
+                int(vice),
+                bank=float(bank),
+                budget_limit=budget_limit,
+                source=source,
+            )
+            validated = validate_squad(candidate, bundle.players, bundle.rules)
+        except (SquadValidationError, ValueError) as exc:
+            st.error(str(exc))
+        else:
+            _set_selection(candidate)
+            st.success(
+                f"Squad saved: {validated.formation}, £{validated.total_cost:.1f}m."
+            )
+            st.rerun()
+
+
+def _render_screenshot_input(bundle: Any) -> None:
+    upload_col, action_col = st.columns([2, 1])
+    with upload_col:
+        uploaded = st.file_uploader(
+            "Upload an FPL Pick Team screenshot",
+            type=["png", "jpg", "jpeg"],
+            help=(
+                "The recognizer locates 11 starters and four substitutes, reads "
+                "their nameplates locally with Tesseract, and checks the result "
+                "against current FPL squad rules. Images are not retained."
+            ),
+        )
+    with action_col:
+        st.write("")
+        st.write("")
+        recognize_clicked = st.button(
+            "Read my screenshot",
+            type="primary",
+            disabled=uploaded is None,
+            width="stretch",
+        )
+    if recognize_clicked and uploaded is not None:
+        suffix = Path(uploaded.name).suffix.lower() or ".png"
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+                handle.write(uploaded.getvalue())
+                temporary_path = Path(handle.name)
+            with st.spinner("Finding the pitch and reading player names…"):
+                recognition = recognize_screenshot(
+                    temporary_path,
+                    bundle.players,
+                    bundle.rules,
+                )
+            _set_selection(recognition.selection, recognition.audit)
+            st.success(
+                f"Found a {recognition.audit['formation']} squad · "
+                f"average name confidence {100 * recognition.audit['mean_match_score']:.1f}%"
+            )
+            st.rerun()
+        except (ScreenshotRecognitionError, OSError, ValueError) as exc:
+            st.error(str(exc))
+            st.info("If this image remains unreadable, choose Build manually and enter the squad directly.")
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
+
+def _guide_card(icon: str, title: str, copy: str) -> None:
+    st.markdown(
+        f'<div class="guide-card"><div class="guide-icon">{escape(icon)}</div>'
+        f'<div class="guide-title">{escape(title)}</div>'
+        f'<div class="guide-copy">{escape(copy)}</div></div>',
+        unsafe_allow_html=True,
     )
 
 
@@ -202,76 +601,79 @@ st.set_page_config(
     page_icon="⚽",
     layout="wide",
 )
+_inject_styles()
 st.title("FPL Squad Lab")
-st.caption("Screenshot recognition, model-derived ratings, and legal squad optimization")
+st.markdown(
+    """
+    <div class="hero-strip">
+      <div class="hero-kicker">Your squad, explained</div>
+      <div class="hero-copy">Upload your FPL screenshot or build the full squad yourself. See it on the pitch, get an intuitive 0–100 rating, and explore model-backed transfer ideas.</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 try:
     bundle = _bundle()
 except (ServingBundleError, FileNotFoundError, OSError, ValueError) as exc:
-    st.error(f"The deployed serving bundle could not be loaded: {exc}")
+    st.error(f"The current FPL data could not be loaded: {exc}")
     st.stop()
 
 manifest = bundle.manifest
 with st.sidebar:
-    st.header("Current model")
-    st.write(f"Season: **{manifest.get('season') or 'unknown'}**")
-    st.write(f"Snapshot GW: **{manifest.get('snapshot_gameweek') or 'unknown'}**")
-    st.write(f"Updated: **{manifest.get('prediction_created_at_utc') or 'unknown'}**")
+    st.header("Prediction settings")
     horizon = st.selectbox(
-        "Prediction horizon",
+        "How far ahead?",
         bundle.horizons,
         index=(bundle.horizons.index(3) if 3 in bundle.horizons else 0),
         format_func=lambda value: f"Next {value} Gameweek{'s' if value != 1 else ''}",
+        help=(
+            "One Gameweek emphasizes the immediate fixture. Three or five "
+            "Gameweeks reward players with a stronger short-term run."
+        ),
     )
-    st.caption("Ratings and recommendations use the same model version.")
-
-upload_col, action_col = st.columns([2, 1])
-with upload_col:
-    uploaded = st.file_uploader(
-        "Upload an FPL Pick Team screenshot",
-        type=["png", "jpg", "jpeg"],
-        help="Clean native screenshots work best. Uploaded images are processed temporarily.",
-    )
-with action_col:
-    st.write("")
-    st.write("")
-    recognize_clicked = st.button(
-        "Recognize screenshot",
-        type="primary",
-        disabled=uploaded is None,
-        width="stretch",
-    )
-
-if recognize_clicked and uploaded is not None:
-    suffix = Path(uploaded.name).suffix.lower() or ".png"
-    temporary_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
-            handle.write(uploaded.getvalue())
-            temporary_path = Path(handle.name)
-        with st.spinner("Reading player labels and solving the legal squad…"):
-            recognition = recognize_screenshot(
-                temporary_path,
-                bundle.players,
-                bundle.rules,
-            )
-        _set_selection(recognition.selection, recognition.audit)
-        st.success(
-            f"Recognized {recognition.audit['formation']} · "
-            f"mean match {100 * recognition.audit['mean_match_score']:.1f}%"
-        )
-        st.rerun()
-    except (ScreenshotRecognitionError, OSError, ValueError) as exc:
-        st.error(str(exc))
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    st.divider()
+    st.subheader("Current update", help="The data snapshot used by every rating and recommendation.")
+    st.write(f"**Season:** {manifest.get('season') or 'Unknown'}")
+    st.write(f"**Data through:** Gameweek {manifest.get('snapshot_gameweek') or 'Unknown'}")
+    st.write(f"**Last forecast:** {manifest.get('prediction_created_at_utc') or 'Unknown'}")
+    st.caption("The same prediction version is used across ratings and transfer suggestions.")
 
 selection = _selection()
 if selection is None:
-    st.info("Upload a screenshot, or generate the model's best legal squad below.")
-    if st.button("Generate best possible squad"):
-        with st.spinner("Solving the exact squad optimization…"):
+    st.subheader(
+        "Add your squad",
+        help="Screenshot recognition is optional. Manual entry supports every legal FPL formation.",
+    )
+    entry_method = st.segmented_control(
+        "Choose an input method",
+        ["📸 Screenshot", "✍️ Build manually"],
+        default="📸 Screenshot",
+        help="Both routes create the same editable 15-player squad.",
+    )
+    if entry_method == "📸 Screenshot":
+        _render_screenshot_input(bundle)
+    else:
+        formations = legal_formations(bundle.rules)
+        formation = st.selectbox(
+            "Starting formation",
+            formations,
+            index=formations.index("3-4-3") if "3-4-3" in formations else 0,
+            help="All formations shown here satisfy the official minimum and maximum starters by position.",
+        )
+        _render_interactive_pitch(
+            bundle,
+            formation,
+            None,
+            key_prefix="manual",
+            submit_label="Save manual squad",
+            source="manual",
+            budget_limit=bundle.rules.budget,
+        )
+    st.markdown("#### Or let the model start for you")
+    st.caption("Generate the highest-projected legal £100m squad, then edit any player.")
+    if st.button("Generate best possible squad", width="stretch"):
+        with st.spinner("Building the strongest legal squad…"):
             optimized = optimize_selection(bundle, horizon)
         _set_selection(optimized.selection)
         st.session_state["optimization_result"] = optimized.as_dict(
@@ -280,35 +682,118 @@ if selection is None:
         st.rerun()
     st.stop()
 
+with st.expander("Replace this squad", expanded=False):
+    replacement = st.segmented_control(
+        "Choose another input method",
+        ["📸 Screenshot", "✍️ Build manually"],
+        default=None,
+        key="replacement_method",
+    )
+    if replacement == "📸 Screenshot":
+        _render_screenshot_input(bundle)
+    elif replacement == "✍️ Build manually":
+        replacement_formations = legal_formations(bundle.rules)
+        replacement_formation = st.selectbox(
+            "New formation",
+            replacement_formations,
+            index=(
+                replacement_formations.index("3-4-3")
+                if "3-4-3" in replacement_formations
+                else 0
+            ),
+            key="replacement_formation",
+            help="You can choose any legal FPL formation.",
+        )
+        _render_interactive_pitch(
+            bundle,
+            replacement_formation,
+            None,
+            key_prefix="manual",
+            submit_label="Replace with manual squad",
+            source="manual",
+            budget_limit=bundle.rules.budget,
+        )
+
 audit = st.session_state.get("recognition_audit")
 if isinstance(audit, dict):
     if audit.get("review_required"):
         st.warning(
-            "Review required for: " + ", ".join(audit["low_confidence_slots"])
+            "A few names need checking: " + ", ".join(audit["low_confidence_slots"])
         )
-    with st.expander("OCR evidence and alternatives"):
+    with st.expander(
+        "Screenshot reading details",
+        expanded=bool(audit.get("review_required")),
+    ):
+        st.caption(
+            "Confidence measures how closely the OCR text matched a current player name. It is not a prediction of player performance."
+        )
         st.dataframe(_recognition_table(audit), hide_index=True, width="stretch")
 
 current_tab, rating_tab, improve_tab, model_tab = st.tabs(
-    ["Squad", "Rating", "Improve", "Model provenance"]
+    ["⚽ My squad", "📊 Squad rating", "↗ Improve my team", "? How it works"]
 )
 
 with current_tab:
     try:
         current_validated = validate_squad(selection, bundle.players, bundle.rules)
         metric_cols = st.columns(3)
-        metric_cols[0].metric("Formation", current_validated.formation)
-        metric_cols[1].metric("Squad cost", f"£{current_validated.total_cost:.1f}m")
-        metric_cols[2].metric("Bank", "Unknown" if selection.bank is None else f"£{selection.bank:.1f}m")
-        st.dataframe(_player_table(bundle, selection), hide_index=True, width="stretch")
+        metric_cols[0].metric(
+            "Formation",
+            current_validated.formation,
+            help="The current starting shape, inferred from the selected players.",
+            border=True,
+        )
+        metric_cols[1].metric(
+            "Squad value",
+            f"£{current_validated.total_cost:.1f}m",
+            help="Sum of the current FPL prices for all 15 players.",
+            border=True,
+        )
+        metric_cols[2].metric(
+            "Money in bank",
+            "Unknown" if selection.bank is None else f"£{selection.bank:.1f}m",
+            help="Cash available for transfers. Screenshot imports cannot determine this automatically.",
+            border=True,
+        )
+        st.markdown(_pitch_html(bundle, selection), unsafe_allow_html=True)
     except SquadValidationError as exc:
         st.error(str(exc))
-    _render_editor(bundle, selection)
+
+    with st.expander("Player list and projections"):
+        st.dataframe(
+            _player_table(bundle, selection, horizon),
+            hide_index=True,
+            width="stretch",
+        )
+    with st.expander("Edit players or change formation"):
+        edit_formations = legal_formations(bundle.rules)
+        current_formation = current_validated.formation
+        edit_formation = st.selectbox(
+            "Formation",
+            edit_formations,
+            index=edit_formations.index(current_formation),
+            key="edit_formation",
+            help="Changing shape moves players between the XI and bench where possible; review every slot before applying.",
+        )
+        _render_interactive_pitch(
+            bundle,
+            edit_formation,
+            selection,
+            key_prefix="edit",
+            submit_label="Apply squad changes",
+            source=selection.source,
+            budget_limit=selection.budget_limit,
+        )
 
 with rating_tab:
-    if st.button("Rate this squad", type="primary"):
+    st.subheader(
+        "How strong is this squad?",
+        help="Ratings compare model projections with 1,000 legal, budget-matched, human-like squads.",
+    )
+    st.caption("A score around 75 is typical; 80 is good, 90+ is excellent, and 95 is exceptional.")
+    if st.button("Rate this squad", type="primary", width="stretch"):
         try:
-            with st.spinner("Applying the point model and reference calibration…"):
+            with st.spinner("Projecting points and comparing similar legal squads…"):
                 validated, projection, rating, details = rate_selection(
                     bundle, selection, horizon
                 )
@@ -326,16 +811,37 @@ with rating_tab:
     rating_result = st.session_state.get("rating_result")
     if isinstance(rating_result, dict):
         scores = rating_result["rating"]["scores"]
-        columns = st.columns(len(scores))
-        for column, (name, score) in zip(columns, scores.items(), strict=True):
-            column.metric(name.title(), f"{score:.1f}")
+        ordered = ["overall", "goalkeeper", "defence", "midfield", "attack", "bench", "captaincy"]
+        first = st.columns(4)
+        second = st.columns(3)
+        for column, name in zip(first + second, ordered, strict=True):
+            column.metric(
+                name.title(),
+                f"{scores[name]:.1f}",
+                help=SCORE_HELP[name],
+                border=True,
+            )
         projection = rating_result["projection"]
-        st.write(
-            f"Projected {horizon}-GW overall points: "
-            f"**{projection['overall_points']:.2f}**"
+        st.info(
+            f"The model projects **{projection['overall_points']:.2f} points** "
+            f"across the next {horizon} Gameweek{'s' if horizon != 1 else ''}, including captaincy."
         )
-        st.caption(rating_result["rating"]["interpretation"])
-        st.dataframe(pd.DataFrame(rating_result["players"]), hide_index=True, width="stretch")
+        strengths = rating_result["rating"].get("strengths", [])
+        weaknesses = rating_result["rating"].get("weaknesses", [])
+        insight_cols = st.columns(2)
+        insight_cols[0].success(
+            "Strong areas: " + (", ".join(name.title() for name in strengths) if strengths else "No standout area yet")
+        )
+        insight_cols[1].warning(
+            "Areas to review: " + (", ".join(name.title() for name in weaknesses) if weaknesses else "No major weakness detected")
+        )
+        with st.expander("Player-by-player projection"):
+            st.dataframe(pd.DataFrame(rating_result["players"]), hide_index=True, width="stretch")
+        with st.expander("Rating calculation details"):
+            st.write(rating_result["rating"]["interpretation"])
+            st.caption(
+                "The 0–100 score is a presentation scale. Raw projected points and percentile rank preserve the underlying model ordering."
+            )
         st.download_button(
             "Download rating JSON",
             json.dumps(rating_result, indent=2),
@@ -344,11 +850,22 @@ with rating_tab:
         )
 
 with improve_tab:
+    st.subheader(
+        "Find better moves",
+        help="The optimizer searches legal squads exactly; it does not simply swap in the highest-scoring individual player.",
+    )
     control_cols = st.columns(3)
-    max_transfers = control_cols[0].slider("Maximum transfers", 1, 5, 3)
+    max_transfers = control_cols[0].slider(
+        "Maximum transfers",
+        1,
+        5,
+        3,
+        help="Limits how many current players can be replaced.",
+    )
     preseason = control_cols[1].checkbox(
         "Preseason / transfers are free",
         value=bool(manifest.get("snapshot_gameweek") == 1),
+        help="When enabled, transfer hits are not deducted.",
     )
     free_transfers = control_cols[2].number_input(
         "Available free transfers",
@@ -356,13 +873,14 @@ with improve_tab:
         max_value=5,
         value=max_transfers if preseason else 1,
         disabled=preseason,
+        help="Extra transfers beyond this number cost four projected points each.",
     )
     improve_col, rebuild_col = st.columns(2)
     improve = improve_col.button("Suggest transfers", type="primary", width="stretch")
     rebuild = rebuild_col.button("Generate best squad from scratch", width="stretch")
     if improve or rebuild:
         try:
-            with st.spinner("Solving exact FPL constraints…"):
+            with st.spinner("Searching all legal combinations…"):
                 optimized = optimize_selection(
                     bundle,
                     horizon,
@@ -385,19 +903,24 @@ with improve_tab:
     if isinstance(optimization, dict):
         projection = optimization["projection"]
         metric_cols = st.columns(4)
-        metric_cols[0].metric("Formation", projection["formation"])
-        metric_cols[1].metric("Projected points", f"{projection['overall_points']:.2f}")
+        metric_cols[0].metric("Formation", projection["formation"], border=True)
+        metric_cols[1].metric(
+            "Projected points",
+            f"{projection['overall_points']:.2f}",
+            help=SCORE_HELP["overall"],
+            border=True,
+        )
         metric_cols[2].metric(
-            "Gross gain",
-            "New squad"
-            if optimization["projected_points_gain"] is None
-            else f"{optimization['projected_points_gain']:+.2f}",
+            "Gain before hits",
+            "New squad" if optimization["projected_points_gain"] is None else f"{optimization['projected_points_gain']:+.2f}",
+            help="Projected improvement before transfer-point deductions.",
+            border=True,
         )
         metric_cols[3].metric(
-            "Net gain",
-            "New squad"
-            if optimization["net_projected_points_gain"] is None
-            else f"{optimization['net_projected_points_gain']:+.2f}",
+            "Gain after hits",
+            "New squad" if optimization["net_projected_points_gain"] is None else f"{optimization['net_projected_points_gain']:+.2f}",
+            help="Projected improvement after any four-point transfer hits.",
+            border=True,
         )
         outgoing = optimization["transfers_out"]
         incoming = optimization["transfers_in"]
@@ -405,20 +928,19 @@ with improve_tab:
             st.dataframe(
                 pd.DataFrame(
                     {
-                        "Transfer out": [row["display_name"] for row in outgoing],
-                        "Transfer in": [row["display_name"] for row in incoming],
+                        "Sell": [row["display_name"] for row in outgoing],
+                        "Buy": [row["display_name"] for row in incoming],
                     }
                 ),
                 hide_index=True,
                 width="stretch",
             )
-        st.dataframe(
-            pd.DataFrame(optimization["selected_players"]),
-            hide_index=True,
-            width="stretch",
-        )
-        if st.button("Use this optimized squad"):
-            _set_selection(SquadSelection.from_mapping(optimization["selection"]))
+        optimized_selection = SquadSelection.from_mapping(optimization["selection"])
+        st.markdown(_pitch_html(bundle, optimized_selection), unsafe_allow_html=True)
+        with st.expander("Full optimized player list"):
+            st.dataframe(pd.DataFrame(optimization["selected_players"]), hide_index=True, width="stretch")
+        if st.button("Use this optimized squad", type="primary"):
+            _set_selection(optimized_selection)
             st.rerun()
         st.download_button(
             "Download optimization JSON",
@@ -428,19 +950,102 @@ with improve_tab:
         )
 
 with model_tab:
-    st.json(
-        {
-            "season": manifest.get("season"),
-            "snapshot_gameweek": manifest.get("snapshot_gameweek"),
-            "snapshot_timestamp": manifest.get("snapshot_timestamp"),
-            "prediction_created_at_utc": manifest.get("prediction_created_at_utc"),
-            "model_runs": manifest.get("model_runs"),
-            "horizons": manifest.get("horizons"),
-            "reference_configuration": manifest.get("reference_configuration"),
-            "runtime_policy": manifest.get("runtime_policy"),
-        }
+    st.subheader("How the predictions and ratings work")
+    guide_columns = st.columns(3)
+    with guide_columns[0]:
+        _guide_card(
+            "🧠",
+            "Player forecasts",
+            "A random-forest model learns recurring relationships between historical FPL performance, playing time, form, expected statistics, team strength, and upcoming opponents.",
+        )
+    with guide_columns[1]:
+        _guide_card(
+            "⏱️",
+            "Line-up likelihood",
+            "Separate models estimate appearances, starts, and minutes. Club-level reconciliation prevents a team from being treated as if too many players can start at once.",
+        )
+    with guide_columns[2]:
+        _guide_card(
+            "📏",
+            "Squad rating",
+            "Your projected score is compared with 1,000 legal, budget-matched, human-like squads, then shown on an intuitive scale where the middle reference squad scores 75.",
+        )
+
+    metadata = _model_metadata(str(bundle.root), horizon)
+    evaluation = metadata.get("evaluation", {})
+    leaderboard = evaluation.get("leaderboard", [])
+    selected_name = metadata.get("selected_model", "unknown model")
+    selected_metrics = next(
+        (row for row in leaderboard if row.get("model") == selected_name),
+        {},
     )
-    st.caption(
-        "The deployed bundle includes the checksummed model artifacts that "
-        "produced these predictions. Training data and uploaded screenshots are not persisted."
+    st.markdown("### Training snapshot")
+    training_cols = st.columns(4)
+    training_cols[0].metric(
+        "Training examples",
+        f"{int(metadata.get('training_rows', 0)):,}" if metadata else "Unknown",
+        help="Each example is one player observed at a historical Gameweek deadline.",
+        border=True,
     )
+    training_cols[1].metric(
+        "Model type",
+        str(selected_name).replace("_", " ").title(),
+        help="Random forests combine many decision trees and average their forecasts.",
+        border=True,
+    )
+    training_cols[2].metric(
+        "Validation MAE",
+        f"{float(selected_metrics['mae']):.2f}" if "mae" in selected_metrics else "Unknown",
+        help="Mean absolute error: the average absolute difference between prediction and outcome in historical time-based tests.",
+        border=True,
+    )
+    training_cols[3].metric(
+        "Ranking correlation",
+        f"{float(selected_metrics['ranking_correlation']):.2f}" if selected_metrics.get("ranking_correlation") is not None else "Unknown",
+        help="How well the model ordered players from weaker to stronger in historical tests; closer to 1 is better.",
+        border=True,
+    )
+
+    with st.expander("What information does the model use?"):
+        features = metadata.get("feature_schema", {})
+        st.markdown(
+            """
+            - **FPL output:** points, minutes, starts, goals, assists, clean sheets, bonus and BPS.
+            - **Underlying performance:** expected goals, expected assists, influence, creativity, threat and ICT index.
+            - **Recent evidence:** recent points, minutes and how many recent Gameweeks are available.
+            - **Fixtures and teams:** home/away fixture counts, opponent attack/defence strength, and the player's club strength.
+            - **Player context:** position, club and current price.
+
+            Missing inputs are handled by the trained preprocessing pipeline. Current injury/availability percentages are applied to the immediate forecast after the base model prediction.
+            """
+        )
+        st.caption(
+            f"This horizon uses {len(features.get('numeric', []))} numeric and {len(features.get('categorical', []))} categorical feature fields."
+        )
+    with st.expander("What do the scores mean?"):
+        st.markdown(
+            """
+            - **Projected points** are the raw model forecast for the selected window.
+            - **Percentile** is the percentage of reference squads projected below yours.
+            - **0–100 rating** is a school-style presentation of that rank: roughly 75 is typical, 80 is good, 90+ is excellent and 95 is exceptional.
+            - **Overall** uses the starting XI plus the extra captain contribution; it is not the average of the position ratings.
+            - **Bench** is reported separately because substitutes only contribute through legal automatic substitutions.
+            """
+        )
+    with st.expander("Technical version details"):
+        st.json(
+            {
+                "season": manifest.get("season"),
+                "data_snapshot_gameweek": manifest.get("snapshot_gameweek"),
+                "data_snapshot_timestamp": manifest.get("snapshot_timestamp"),
+                "prediction_created_at_utc": manifest.get("prediction_created_at_utc"),
+                "model_runs": manifest.get("model_runs"),
+                "prediction_horizons": manifest.get("horizons"),
+                "reference_squads": manifest.get("reference_configuration"),
+                "training_coverage": metadata.get("training_coverage"),
+                "validation_folds": evaluation.get("folds"),
+            }
+        )
+        st.caption(
+            "Uploaded screenshots are processed temporarily and are not retained. The deployed model files are checksummed so the displayed version can be audited."
+        )
