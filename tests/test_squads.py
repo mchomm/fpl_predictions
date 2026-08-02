@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 
 import pandas as pd
@@ -142,6 +143,28 @@ def test_valid_squad_has_formation_and_cost(
     validated = validate_squad(selection, players, rules)
     assert validated.formation == "3-4-3"
     assert validated.total_cost == 85.0
+
+
+def test_budget_can_be_ignored_for_editing_but_not_for_rating(
+    rules: SquadRules,
+    players: pd.DataFrame,
+    selection: SquadSelection,
+) -> None:
+    expensive_players = players.copy()
+    expensive_players["price"] = expensive_players["price"] + 2.0
+    selection_with_high_limit = replace(selection, budget_limit=200.0)
+
+    with pytest.raises(SquadValidationError, match="exceeds budget 100.0"):
+        validate_squad(selection_with_high_limit, expensive_players, rules)
+
+    editable = validate_squad(
+        selection_with_high_limit,
+        expensive_players,
+        rules,
+        enforce_budget=False,
+    )
+    assert editable.total_cost == 115.0
+    assert editable.budget_limit == 100.0
 
 
 def test_validation_reports_duplicate_and_bad_captain(

@@ -53,7 +53,7 @@ BUNDLE_ROOT = Path(os.getenv("FPL_SERVING_BUNDLE", "deployment/current"))
 SCORE_HELP = {
     "overall": (
         "Projected starting-XI points plus the extra captain points, compared "
-        "with 1,000 legal, budget-matched, human-like squads."
+        "with 1,000 realistic, legal squads at a similar budget."
     ),
     "goalkeeper": "How strongly the starting goalkeeper projects over this window.",
     "defence": "Combined projection from starting defenders.",
@@ -143,8 +143,11 @@ def _inject_styles() -> None:
         }
         [data-testid="stSidebar"] [data-baseweb="select"] span,
         [data-testid="stSidebar"] [data-baseweb="select"] input,
+        [data-testid="stSidebar"] [data-baseweb="select"] div,
+        [data-testid="stSidebar"] [data-baseweb="select"] svg,
         [data-testid="stSidebar"] [data-baseweb="input"] input {
           color: #172033 !important; -webkit-text-fill-color: #172033 !important;
+          fill: #172033 !important;
         }
         [data-baseweb="popover"], [data-baseweb="menu"] { background: #fff !important; }
         [data-baseweb="popover"] *, [data-baseweb="menu"] * {
@@ -186,7 +189,15 @@ def _inject_styles() -> None:
         }
         .stButton > button[kind="primary"] {
           background: linear-gradient(90deg, #37003c, #681270);
-          border: 0; box-shadow: 0 7px 18px rgba(55,0,60,.2);
+          border: 0; box-shadow: 0 7px 18px rgba(55,0,60,.2); color:#fff !important;
+        }
+        .stButton > button[kind="primary"] * { color:#fff !important; }
+        .stButton > button:disabled, .stButton > button[kind="primary"]:disabled {
+          background:#e4e7ec !important; border:1px solid #c7ccd4 !important;
+          color:#475467 !important; box-shadow:none !important; opacity:1 !important;
+        }
+        .stButton > button:disabled *, .stButton > button[kind="primary"]:disabled * {
+          color:#475467 !important; -webkit-text-fill-color:#475467 !important;
         }
         .fpl-pitch {
           position: relative; overflow: visible; border-radius: 24px;
@@ -217,6 +228,7 @@ def _inject_styles() -> None:
           object-fit:contain; object-position:center bottom; }
         .player-silhouette { width:62px; height:70px; display:flex; align-items:flex-end;
           justify-content:center; margin:0 auto; color:#d7dbe2; }
+        .player-silhouette.is-hidden { display:none; }
         .player-silhouette svg { width:58px; height:66px; filter:drop-shadow(0 3px 4px rgba(0,0,0,.18)); }
         .player-label { position:relative; border-radius:9px; overflow:hidden; background:white; }
         .club-band { height:5px; }
@@ -344,11 +356,11 @@ def _club_colours(short_name: str) -> tuple[str, str]:
 
 def _stat_value(value: Any, *, decimals: int = 1, suffix: str = "") -> str:
     if value is None or pd.isna(value):
-        return "—"
+        return "N/A"
     try:
         return f"{float(value):.{decimals}f}{suffix}"
     except (TypeError, ValueError):
-        return "—"
+        return "N/A"
 
 
 def _friendly_timestamp(value: Any, *, include_time: bool = True) -> str:
@@ -365,9 +377,10 @@ def _friendly_timestamp(value: Any, *, include_time: bool = True) -> str:
     return f"{local.strftime('%B %d, %Y').replace(' 0', ' ')} at {clock} {local.tzname()}"
 
 
-def _silhouette_html() -> str:
+def _silhouette_html(*, hidden: bool = False) -> str:
+    classes = "player-silhouette is-hidden" if hidden else "player-silhouette"
     return (
-        '<div class="player-silhouette" aria-hidden="true">'
+        f'<div class="{classes}" aria-hidden="true">'
         '<svg viewBox="0 0 80 92" xmlns="http://www.w3.org/2000/svg">'
         '<circle cx="40" cy="23" r="16" fill="currentColor"/>'
         '<path d="M12 88c1-24 10-39 28-39s27 15 28 39H12Z" fill="currentColor"/>'
@@ -401,12 +414,14 @@ def _player_card(
     marker_html = (
         f'<span class="captain-chip">{escape(marker)}</span>' if marker else ""
     )
-    image_html = _silhouette_html()
     if pd.notna(photo) and photo:
-        image_html += (
+        image_html = _silhouette_html(hidden=True) + (
             f'<img class="player-photo" src="{escape(str(photo), quote=True)}" '
-            'alt="" loading="lazy" onerror="this.style.display=\'none\'">'
+            'alt="" loading="lazy" '
+            'onerror="this.style.display=\'none\';this.previousElementSibling.style.display=\'flex\'">'
         )
+    else:
+        image_html = _silhouette_html()
     projected = None if prediction is None else prediction.get(f"predicted_points_{horizon}")
     start_probability = None if prediction is None else prediction.get("start_probability_1")
     if start_probability is not None and not pd.isna(start_probability):
@@ -679,11 +694,16 @@ def _render_interactive_pitch(
     status_cols[2].metric(
         "Current cost",
         f"£{cost:.1f}m",
-        help="Manual squads must respect the current £100m FPL budget.",
+        help="£100m is the maximum allowed squad value.",
         border=True,
     )
     if complete and not unique:
         st.warning("A player has been selected more than once. Every slot must be unique.")
+    if complete and cost > bundle.rules.budget + 1e-9:
+        st.warning(
+            f"This squad costs £{cost:.1f}m. The maximum is £{bundle.rules.budget:.1f}m. "
+            "You can save it and keep editing, but it cannot be rated or optimized yet."
+        )
     submitted = st.button(
         submit_label,
         type="primary",
@@ -708,14 +728,26 @@ def _render_interactive_pitch(
                 budget_limit=budget_limit,
                 source=source,
             )
-            validated = validate_squad(candidate, bundle.players, bundle.rules)
+            validated = validate_squad(
+                candidate,
+                bundle.players,
+                bundle.rules,
+                enforce_budget=False,
+            )
         except (SquadValidationError, ValueError) as exc:
             st.error(str(exc))
         else:
             _set_selection(candidate)
-            st.success(
-                f"Squad saved: {validated.formation}, £{validated.total_cost:.1f}m."
-            )
+            if validated.total_cost > bundle.rules.budget + 1e-9:
+                st.warning(
+                    f"Squad saved at £{validated.total_cost:.1f}m. The FPL maximum is "
+                    f"£{bundle.rules.budget:.1f}m, so you will need to reduce the cost "
+                    "before rating or improving it."
+                )
+            else:
+                st.success(
+                    f"Squad saved: {validated.formation}, £{validated.total_cost:.1f}m."
+                )
             st.rerun()
 
 
@@ -788,7 +820,7 @@ st.markdown(
     <div class="hero-strip">
       <div class="hero-league-badge"><span>PL</span> Premier League fantasy analysis</div>
       <div class="hero-kicker">Your FPL squad, explained</div>
-      <div class="hero-copy">Upload your Fantasy Premier League screenshot or build the full squad yourself. See it on the pitch, get an intuitive 0–100 rating, and explore model-backed transfer ideas.</div>
+      <div class="hero-copy">Upload a Fantasy Premier League screenshot or pick the players yourself. You can see your squad on the pitch, check its 0-100 rating, and find transfers that may improve it.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -827,7 +859,7 @@ with st.sidebar:
     st.caption("This tells you exactly how current the player data and forecasts are. Ratings and transfer suggestions use the same update.")
     st.markdown(
         """
-        <div class="sidebar-credit">Created by <strong>Max Homm</strong><br>
+        <div class="sidebar-credit">Created by <strong>Max Homm</strong>, a Computer Science student at the University of Waterloo.<br>
         <a href="https://mchomm.github.io/" target="_blank" rel="noopener noreferrer">Portfolio</a> ·
         <a href="https://www.linkedin.com/in/max-homm/" target="_blank" rel="noopener noreferrer">LinkedIn</a></div>
         """,
@@ -881,10 +913,10 @@ if selection is None:
             """
             1. **Add your 15-player FPL squad** from a screenshot, manually, or with the optimizer.
             2. **Choose one, three, or five Gameweeks** in the sidebar.
-            3. **Rate the squad** to compare its model projection with legal, human-like squads.
+            3. **Rate the squad** to compare its forecast with realistic, legal squads at a similar budget.
             4. **Explore improvements** that respect Premier League fantasy prices, positions, club limits, and transfer costs.
 
-            The aim is to make Premier League and FPL data useful to a fan without hiding the uncertainty. Forecasts are estimates—not guarantees.
+            This app is meant to make Premier League and FPL data easier to use. Forecasts are estimates, not guarantees.
             """
         )
     st.stop()
@@ -937,6 +969,26 @@ if isinstance(audit, dict):
         )
         st.dataframe(_recognition_table(audit), hide_index=True, width="stretch")
 
+try:
+    display_validated = validate_squad(
+        selection,
+        bundle.players,
+        bundle.rules,
+        enforce_budget=False,
+    )
+except SquadValidationError as exc:
+    st.error(str(exc))
+    st.stop()
+
+maximum_budget = float(bundle.rules.budget)
+squad_over_budget = display_validated.total_cost > maximum_budget + 1e-9
+if squad_over_budget:
+    st.warning(
+        f"This squad is worth £{display_validated.total_cost:.1f}m, but the FPL maximum "
+        f"is £{maximum_budget:.1f}m. You can still view and edit it. Reduce the squad "
+        "value before using the rating or transfer tools."
+    )
+
 start_tab, current_tab, rating_tab, improve_tab, model_tab = st.tabs(
     ["👋 Start here", "⚽ My squad", "📊 Squad rating", "↗ Improve my team", "? Model guide"],
     default="⚽ My squad",
@@ -947,7 +999,7 @@ with start_tab:
     st.markdown(
         """
         <div class="purpose-callout">
-          FPL Squad Lab was built to turn a dense set of Premier League player forecasts into something a fan can use quickly: <strong>How good is my squad, why, and what could improve it?</strong> It combines official FPL player information with historical modelling while keeping every recognized player editable.
+          FPL Squad Lab helps answer three practical questions: <strong>How good is my squad? Where is it strongest? Which transfers might help?</strong> It uses official FPL player information and historical results, and every player remains editable after a screenshot is read.
         </div>
         """,
         unsafe_allow_html=True,
@@ -958,15 +1010,15 @@ with start_tab:
     with guide_columns[1]:
         _guide_card("2️⃣", "Choose your window", "Use the sidebar to focus on the next one, three, or five Premier League Gameweeks.")
     with guide_columns[2]:
-        _guide_card("3️⃣", "Rate the squad", "See projected points plus readable 0–100 ratings for the whole squad and each positional area.")
+        _guide_card("3️⃣", "Rate the squad", "See projected points and simple 0-100 ratings for the full squad and each part of the team.")
     with guide_columns[3]:
         _guide_card("4️⃣", "Explore improvements", "Ask the optimizer for legal transfers, accounting for prices, club limits, formation, and transfer hits.")
-    st.info("Tip: hover over a player on desktop—or tap the card on mobile—to see form, ownership, starting likelihood, and the selected-window forecast.")
+    st.info("Tip: hover over a player on desktop, or tap the card on mobile, to see form, ownership, starting likelihood, and the current forecast.")
     st.caption("Forecasts are estimates, not guarantees. Late team news and real football will always create uncertainty.")
 
 with current_tab:
     try:
-        current_validated = validate_squad(selection, bundle.players, bundle.rules)
+        current_validated = display_validated
         metric_cols = st.columns(3)
         metric_cols[0].metric(
             "Formation",
@@ -1020,10 +1072,19 @@ with current_tab:
 with rating_tab:
     st.subheader(
         "How strong is this squad?",
-        help="Ratings compare model projections with 1,000 legal, budget-matched, human-like squads.",
+        help="Ratings compare your forecast with 1,000 realistic, legal squads at a similar budget.",
     )
     st.caption("A score around 75 is typical; 80 is good, 90+ is excellent, and 95 is exceptional.")
-    if st.button("Rate this squad", type="primary", width="stretch"):
+    if squad_over_budget:
+        st.warning(
+            f"Rating is unavailable while the squad is above the £{maximum_budget:.1f}m limit."
+        )
+    if st.button(
+        "Rate this squad",
+        type="primary",
+        width="stretch",
+        disabled=squad_over_budget,
+    ):
         try:
             with st.spinner("Projecting points and comparing similar legal squads…"):
                 validated, projection, rating, details = rate_selection(
@@ -1072,7 +1133,7 @@ with rating_tab:
         with st.expander("Rating calculation details"):
             st.write(rating_result["rating"]["interpretation"])
             st.caption(
-                "The 0–100 score is a presentation scale. Raw projected points and percentile rank preserve the underlying model ordering."
+                "The 0-100 score is a presentation scale. Raw projected points and percentile rank preserve the underlying model ordering."
             )
         st.download_button(
             "Download rating JSON",
@@ -1086,6 +1147,10 @@ with improve_tab:
         "Find better moves",
         help="The optimizer searches legal squads exactly; it does not simply swap in the highest-scoring individual player.",
     )
+    if squad_over_budget:
+        st.warning(
+            f"Transfer suggestions are unavailable while the squad is above the £{maximum_budget:.1f}m limit."
+        )
     control_cols = st.columns(3)
     max_transfers = control_cols[0].slider(
         "Maximum transfers",
@@ -1108,8 +1173,17 @@ with improve_tab:
         help="Extra transfers beyond this number cost four projected points each.",
     )
     improve_col, rebuild_col = st.columns(2)
-    improve = improve_col.button("Suggest transfers", type="primary", width="stretch")
-    rebuild = rebuild_col.button("Generate best squad from scratch", width="stretch")
+    improve = improve_col.button(
+        "Suggest transfers",
+        type="primary",
+        width="stretch",
+        disabled=squad_over_budget,
+    )
+    rebuild = rebuild_col.button(
+        "Generate best squad from scratch",
+        width="stretch",
+        disabled=squad_over_budget,
+    )
     if improve or rebuild:
         try:
             with st.spinner("Searching all legal combinations…"):
@@ -1200,7 +1274,7 @@ with model_tab:
         _guide_card(
             "📏",
             "Squad rating",
-            "Your projected score is compared with 1,000 legal, budget-matched, human-like squads, then shown on an intuitive scale where the middle reference squad scores 75.",
+            "Your projected score is compared with 1,000 legal, budget-matched squads. The result is shown on a familiar scale where the middle reference squad scores 75.",
         )
 
     metadata = _model_metadata(str(bundle.root), horizon)
@@ -1259,7 +1333,7 @@ with model_tab:
             """
             - **Projected points** are the raw model forecast for the selected window.
             - **Percentile** is the percentage of reference squads projected below yours.
-            - **0–100 rating** is a school-style presentation of that rank: roughly 75 is typical, 80 is good, 90+ is excellent and 95 is exceptional.
+            - **0-100 rating** is a school-style presentation of that rank: roughly 75 is typical, 80 is good, 90+ is excellent and 95 is exceptional.
             - **Overall** uses the starting XI plus the extra captain contribution; it is not the average of the position ratings.
             - **Bench** is reported separately because substitutes only contribute through legal automatic substitutions.
             """
@@ -1285,10 +1359,10 @@ with model_tab:
 st.markdown(
     """
     <div class="creator-footer">
-      Built by <strong>Max Homm</strong> ·
+      Built by <strong>Max Homm</strong>, a Computer Science student at the University of Waterloo.<br>
       <a href="https://mchomm.github.io/" target="_blank" rel="noopener noreferrer">Portfolio</a> ·
       <a href="https://www.linkedin.com/in/max-homm/" target="_blank" rel="noopener noreferrer">LinkedIn</a><br>
-      Independent Premier League fantasy project; not affiliated with the Premier League.
+      This is an independent project and is not affiliated with the Premier League.
     </div>
     """,
     unsafe_allow_html=True,

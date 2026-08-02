@@ -74,7 +74,7 @@ def player_label_lookup(players: pd.DataFrame) -> tuple[dict[int, str], dict[str
         ascending=[True, False, True],
     ).itertuples():
         label = (
-            f"{row.display_name} — {row.club_name} · "
+            f"{row.display_name} - {row.club_name} · "
             f"{row.position_short_name} · £{float(row.price):.1f}m "
             f"[ID {int(row.player_id)}]"
         )

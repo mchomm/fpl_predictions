@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
+
+from fpl_predictions.serving.bundle import load_serving_bundle  # noqa: E402
+from fpl_predictions.squads.optimizer import optimize_squad  # noqa: E402
+from fpl_predictions.squads.validation import validate_squad  # noqa: E402
 
 
 @pytest.mark.skipif(
@@ -77,3 +82,42 @@ def test_streamlit_manual_builder_creates_complete_squad() -> None:
     assert not app.exception
     assert any(item.label == "Squad value" for item in app.metric)
     assert any(item.label == "Formation" and item.value == "3-4-3" for item in app.metric)
+
+
+@pytest.mark.skipif(
+    not Path("deployment/current/manifest.json").is_file(),
+    reason="serving bundle is not available",
+)
+def test_streamlit_blocks_rating_and_improvements_over_budget() -> None:
+    bundle = load_serving_bundle(Path("deployment/current"))
+    generous_rules = replace(bundle.rules, budget=200.0)
+    over_budget = replace(
+        optimize_squad(
+            bundle.players,
+            bundle.predictions,
+            generous_rules,
+            horizon=3,
+        ).selection,
+        bank=0.0,
+    )
+    assert (
+        validate_squad(
+            over_budget,
+            bundle.players,
+            bundle.rules,
+            enforce_budget=False,
+        ).total_cost
+        > bundle.rules.budget
+    )
+
+    app = AppTest.from_file("streamlit_app.py", default_timeout=30)
+    app.session_state["selection"] = over_budget.as_dict()
+    app.run()
+
+    assert not app.exception
+    assert any("FPL maximum" in item.value for item in app.warning)
+    assert next(item for item in app.button if item.label == "Rate this squad").disabled
+    assert next(item for item in app.button if item.label == "Suggest transfers").disabled
+    assert next(
+        item for item in app.button if item.label == "Generate best squad from scratch"
+    ).disabled

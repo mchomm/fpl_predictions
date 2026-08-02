@@ -33,6 +33,8 @@ def validate_squad(
     squad: SquadSelection,
     players: pd.DataFrame,
     rules: SquadRules,
+    *,
+    enforce_budget: bool = True,
 ) -> ValidatedSquad:
     """Validate membership, positions, formation, clubs, captaincy, and budget."""
     required_columns = {
@@ -141,11 +143,14 @@ def validate_squad(
         total_cost = float("nan")
     else:
         total_cost = float(prices.sum())
-    budget_limit = squad.budget_limit
-    if budget_limit is None and squad.source in {"manual", "generated"}:
-        budget_limit = rules.budget
+    budget_limit = (
+        rules.budget
+        if squad.budget_limit is None
+        else min(float(squad.budget_limit), rules.budget)
+    )
     if (
-        budget_limit is not None
+        enforce_budget
+        and budget_limit is not None
         and pd.notna(total_cost)
         and total_cost > budget_limit + 1e-9
     ):

@@ -9,7 +9,7 @@ percentile ratings.
 **[Open FPL Squad Lab →](https://fpl-predictions-2026.streamlit.app/)**
 
 Upload a Fantasy Premier League screenshot or build a squad manually, then rate
-it and explore model-backed transfer ideas in the deployed Streamlit app.
+it and explore transfers based on the current forecasts in the deployed app.
 
 The current implementation provides the reproducible data, modelling, and
 squad-rating foundation:
@@ -31,7 +31,7 @@ squad-rating foundation:
 - versioned, schema-validated model artifacts and a reusable prediction service;
 - API-derived squad rules and strict squad legality validation;
 - availability-aware XI, position, bench, and captain projections;
-- deterministic legal reference squads and 0–100 percentile ratings;
+- deterministic legal reference squads and 0-100 percentile ratings;
 - privacy-minimized, reproducible samples of public post-deadline manager squads;
 - tests that use small saved responses rather than the live API.
 
@@ -358,7 +358,7 @@ The current historical models do not learn injury status because reliable
 archived availability snapshots are unavailable. Status and news are retained
 in the prediction output for later availability adjustment and warnings.
 Preseason recent-form features may also be missing. These outputs are raw
-player forecasts, not transfer recommendations or 0–100 squad ratings.
+player forecasts, not transfer recommendations or 0-100 squad ratings.
 
 ## Recognize a squad screenshot
 
@@ -477,7 +477,7 @@ fpl-rate-squad \
   --reference-size 1000
 ```
 
-This repository's saved 2026–27 GW1 data can be exercised immediately with:
+This repository's saved 2026-27 GW1 data can be exercised immediately with:
 
 ```bash
 python scripts/rate_squad.py \
@@ -500,7 +500,7 @@ The default `human_like` reference population corrects the upward bias caused
 by comparing intentional £100m squads with broadly random, under-budget teams.
 It samples complete squads with probability proportional to the product of
 their players' current ownership percentages, conditioned on legality and a
-£99–100m spend. A 0.1 percentage-point floor, matching the API ownership
+£99-100m spend. A 0.1 percentage-point floor, matching the API ownership
 resolution, keeps zero-rounded players possible. The saved point model then
 selects each reference squad's best legal XI and captain and scores it exactly
 like the submitted team.
@@ -516,7 +516,7 @@ band, seed, horizon, lineup policy, reference quantiles, and generated table are
 saved with every report.
 
 Reports preserve empirical midrank percentiles, so tied projections receive the
-middle of their shared rank. They also present a school-style 0–100 score using
+middle of their shared rank. They also present a school-style 0-100 score using
 `75 + 8 × inverse-normal-CDF(smoothed percentile)`, capped at 99.9. This is a
 monotonic display calibration: it cannot change squad ordering, projected
 points, or the evidence behind the percentile.
@@ -571,10 +571,10 @@ python scripts/snapshot_managers.py \
 The command discovers the season-specific Overall league from public manager
 metadata; it does not hard-code a league ID. It samples standings pages and
 entries reproducibly, downloads public picks, verifies 15 unique current player
-IDs, positions 1–15, and exactly one captain and vice-captain, then retains
+IDs, positions 1-15, and exactly one captain and vice-captain, then retains
 lineup multipliers and active-chip information unchanged.
 
-Collection is deliberately rejected before the API deadline. For 2026–27 GW1,
+Collection is deliberately rejected before the API deadline. For 2026-27 GW1,
 the saved official deadline is `2026-08-21T17:30:00Z`; public picks are not
 available before then. Known public entries can be collected explicitly by
 repeating `--manager-id`:
@@ -757,7 +757,7 @@ The original project goals remain in scope:
 
 Phase 4 now validates and generates legal squads, aggregates player predictions
 through the starting XI and captain rules, creates reproducible reference
-populations, and converts projected positional and overall points into 0–100
+populations, and converts projected positional and overall points into 0-100
 percentile ratings.
 
 The exact optimizer now builds squads and bounded-transfer improvements with
