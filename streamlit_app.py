@@ -5,11 +5,20 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from typing import Any
 
 import pandas as pd
 import streamlit as st
+
+# Community Cloud runs this entrypoint from the repository root. Add the
+# src-layout package directly so deployment does not need an editable install
+# of the repository itself.
+REPOSITORY_ROOT = Path(__file__).resolve().parent
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from fpl_predictions.screenshot.recognition import (
     ScreenshotRecognitionError,
